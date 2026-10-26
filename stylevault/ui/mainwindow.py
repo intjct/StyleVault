@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QLabel, QMenu, QStackedWidget, QVBoxLayout, QWidget
 
@@ -65,8 +65,43 @@ class MainWindow(QWidget):
         self.library_page.set_library(self.lib)
         self.lib.rebuild_index()
         self._recover()
+        self._seen = self._signature()
+        self._watch = QTimer(self, interval=1000, timeout=self._poll)      # Claude writes files: pick them up within ~1 s
+        self._watch.start()
         if not os.environ.get("STYLEVAULT_NO_UPDATE_CHECK"):
             self.update_bar.check_later()
+
+    def _signature(self) -> dict:
+        """Modified-times of the files Claude (or the program) changes, per clip."""
+        sig = {}
+        try:
+            names = os.listdir(self.lib.clips_dir)
+        except OSError:
+            return sig
+        for n in names:
+            d = self.lib.clip_dir(n)
+            row = []
+            for f in ("meta.json", "style-card.json"):
+                try:
+                    row.append(os.stat(os.path.join(d, f)).st_mtime_ns)
+                except OSError:
+                    row.append(None)
+            sig[n] = tuple(row)
+        return sig
+
+    def _poll(self):
+        now = self._signature()
+        if now == self._seen:
+            return
+        changed = {k for k in set(now) | set(self._seen) if now.get(k) != self._seen.get(k)}
+        self._seen = now
+        try:
+            self.lib.rebuild_index()
+        except OSError:
+            pass
+        self.library_page.refresh()
+        if self.stack.currentWidget() is self.detail and self.detail.clip_id in changed:
+            self.detail.render()
 
     def _recover(self):
         """Clips left half-done (program closed mid-way) and clips from older versions that have no raw data yet."""
@@ -106,6 +141,7 @@ class MainWindow(QWidget):
         self.library_page.set_library(self.lib)
         self.lib.rebuild_index()
         self._recover()
+        self._seen = self._signature()
 
     # ---- adding clips
     def add_link(self, text: str):

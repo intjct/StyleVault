@@ -177,3 +177,102 @@ def test_copy_command_works_in_a_brand_new_chat(app, tmp_path):
     w.open_clip(cid)
     w.detail._copy_command()
     assert w.lib.root in QApplication.clipboard().text()
+
+
+# ---------------------------------------------------------------- v0.4.0: style card, timeline, folder watching
+import json
+
+from sample_card import CARD, card as make_card
+from stylevault.ui.timeline import PAD, BAR_Y, Timeline
+
+
+def analyzed_clip(w, tmp_path, name="p"):
+    """A clip that has raw data (2 cuts, 2 sound effects) so the timeline has something to show."""
+    cid = w.lib.create_clip("tiktok", name, "effects", "https://x", status="waiting")
+    w.lib.update_meta(cid, duration_sec=10.0, raw_ready=True, title="คลิปทดสอบ")
+    raw = os.path.join(w.lib.clip_dir(cid), "raw")
+    os.makedirs(raw)
+    L.write_json(os.path.join(raw, "cuts.json"), {"cuts_sec": [2.5, 5.0], "cut_count": 2, "avg_shot_sec": 3.33})
+    L.write_json(os.path.join(raw, "audio.json"), {"has_audio": True, "bpm": 120, "onsets_sec": [0.38, 2.4], "silences": [],
+                 "sfx": [{"t": 0.38, "file": "sfx/0001_00.38s.wav", "label": None, "confidence": None},
+                         {"t": 2.4, "file": "sfx/0002_02.40s.wav", "label": None, "confidence": None}]})
+    return cid
+
+
+def test_card_written_by_hand_shows_up_within_two_seconds(app, tmp_path):
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    w.library_page.refresh()
+    assert w.library_page.grid.cards[0]._title()[0] == "รอวิเคราะห์"
+    w.open_clip(cid)
+    assert w.detail.card_holder.count() == 0
+    # Claude writes the card and flips the status
+    L.write_json(os.path.join(w.lib.clip_dir(cid), "style-card.json"), CARD)
+    w.lib.update_meta(cid, status="analyzed")
+    t0 = time.time()
+    assert wait_until(app, lambda: w.detail.card_holder.count() > 0, secs=4)
+    assert time.time() - t0 < 2.5                                           # the plan asks for 2 s
+    assert w.detail.title_lbl.text() == CARD["name_th"]
+    assert w.library_page.cards[cid]._title()[0] == CARD["name_th"]
+    # the index Claude reads is refreshed too
+    idx = L.read_json(os.path.join(w.lib.root, "library-index.json"))
+    assert idx["clips"][0]["name_th"] == CARD["name_th"]
+
+
+def test_detail_page_shows_everything_in_plain_thai(app, tmp_path):
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    L.write_json(os.path.join(w.lib.clip_dir(cid), "style-card.json"), CARD)
+    w.lib.update_meta(cid, status="analyzed")
+    w.open_clip(cid)
+    texts = " ".join(l.text() for l in w.detail.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
+    for need in ("การ์ดคำคมคนดัง", "เหมาะกับ", "คำเด้งขึ้นทีละคำ / พิมพ์ดีดทีละตัว", "ซูมกระแทก", "โครงเรื่อง", "ฮุก: คำคมใหญ่เต็มจอ",
+                 "30 ภาพต่อวินาที", "48 เฟรม (ประมาณ 1.6 วินาที)", "0:00.38", "เสียงวูบ", "ข้อจำกัด"):
+        assert need in texts, need
+    for jargon in ("word-pop", "zoom-punch", "JSON", "remotion_recipe", "fps"):
+        assert jargon not in texts, jargon
+    assert not w.detail.timeline.isHidden() and w.detail.timeline.cuts == [2.5, 5.0] and len(w.detail.timeline.sfx) == 2
+    assert w.detail.timeline.sfx[0]["label"] == "เสียงวูบ"                  # label comes from Claude's card
+
+
+def test_broken_card_never_crashes_and_recovers(app, tmp_path):
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    path = os.path.join(w.lib.clip_dir(cid), "style-card.json")
+    w.lib.update_meta(cid, status="analyzed")
+    w.open_clip(cid)
+    for junk in ("{oops", json.dumps([1, 2]), json.dumps(make_card(tags="เร็ว")), json.dumps(make_card(structure=[{"from": "a"}])), ""):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(junk)
+        w.lib.update_meta(cid, status="analyzed")                          # touch -> watcher fires
+        assert wait_until(app, lambda: cid in w.library_page.cards and "อ่านไม่ได้" in w.library_page.cards[cid]._title()[0], secs=4), junk
+        assert "อ่านไม่ได้" in w.detail.status_box.text()
+        assert w.detail.card_holder.count() == 0
+    L.write_json(path, CARD)                                                # fixed by Claude: recovers on its own
+    w.lib.update_meta(cid, status="analyzed")
+    assert wait_until(app, lambda: w.detail.card_holder.count() > 0, secs=4)
+
+
+def test_timeline_clicks(app, tmp_path):
+    tl = Timeline()
+    tl.resize(600, 80)
+    tl.set_data(10.0, [2.5, 5.0], [{"t": 2.4, "file": "sfx/a.wav", "label": "เสียงวูบ"}])
+    jumps, sounds = [], []
+    tl.seek.connect(jumps.append)
+    tl.play_sfx.connect(sounds.append)
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import QEvent
+
+    def click(x, y):
+        e = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(x, y), QPointF(x, y), Qt.MouseButton.LeftButton,
+                        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        tl.mousePressEvent(e)
+    click(tl._x(7.0), 30)                                                    # empty place: jump there
+    assert len(jumps) == 1 and abs(jumps[0] - 7.0) < 0.05 and not sounds
+    click(tl._x(2.4), BAR_Y)                                                 # orange dot: play it (and jump to it)
+    assert sounds == ["sfx/a.wav"] and abs(jumps[-1] - 2.4) < 0.01
+    click(-50, 30)                                                           # far left: clamps to the start
+    assert jumps[-1] == 0.0
+    tl.grab()                                                                # paints without error
+    Timeline().grab()                                                        # empty timeline too

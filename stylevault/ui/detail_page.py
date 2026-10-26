@@ -1,16 +1,18 @@
-"""Clip detail: playable video, my notes, and clip info. (Style card + timeline arrive in v0.3.)"""
+"""Clip detail: video, my notes, Claude's style card, timeline, clip info, structure and Remotion recipe."""
 from __future__ import annotations
 
 import os
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QScrollArea,
                                QSlider, QVBoxLayout, QWidget)
 
 from .. import library as L
+from .. import stylecard as SC
 from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views
 from . import theme
+from .timeline import Timeline
 
 VIDEO_W = 288
 VIDEO_H = 512
@@ -110,6 +112,22 @@ class DetailPage(QWidget):
         self.copy_btn.clicked.connect(self._copy_command)
         self.right.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
+        self.card_holder = QVBoxLayout()               # Claude's style card (rebuilt on every refresh)
+        self.card_holder.setSpacing(12)
+        self.right.addLayout(self.card_holder)
+
+        self.timeline_title = QLabel("ไทม์ไลน์")
+        self.timeline_title.setObjectName("H2")
+        self.right.addWidget(self.timeline_title)
+        self.timeline = Timeline()
+        self.timeline.seek.connect(self._seek_to)
+        self.timeline.play_sfx.connect(self._play_sfx)
+        self.right.addWidget(self.timeline)
+        self.timeline_legend = QLabel("เส้นน้ำเงิน = จุดตัดภาพ   ·   จุดส้ม = เสียงเอฟเฟกต์ (คลิกเพื่อฟัง)   ·   คลิกที่ว่างเพื่อกระโดดไปตรงนั้น")
+        self.timeline_legend.setObjectName("Soft")
+        self.timeline_legend.setWordWrap(True)
+        self.right.addWidget(self.timeline_legend)
+
         h = QLabel("ข้อมูลคลิป")
         h.setObjectName("H2")
         self.right.addWidget(h)
@@ -121,6 +139,10 @@ class DetailPage(QWidget):
         self.info_grid.setVerticalSpacing(10)
         self.info_grid.setColumnStretch(1, 1)
         self.right.addWidget(self.info)
+
+        self.extra_holder = QVBoxLayout()              # structure, Remotion recipe, limits
+        self.extra_holder.setSpacing(12)
+        self.right.addLayout(self.extra_holder)
 
         btns = QHBoxLayout()
         self.open_url_btn = QPushButton("เปิดลิงก์ต้นฉบับ")
@@ -169,6 +191,7 @@ class DetailPage(QWidget):
             self.seek.setValue(pos)
         dur = self.player.duration() if self.player else 0
         self.time_lbl.setText(f"{_fmt_time(pos / 1000)} / {_fmt_time(dur / 1000)}")
+        self.timeline.set_position(pos / 1000)
 
     def _toggle(self):
         if not self.player:
@@ -229,7 +252,15 @@ class DetailPage(QWidget):
         else:
             self.play_btn.setEnabled(False)
         self.seek.setValue(0)
+        self.timeline.set_position(0)
+        self.render()
 
+    def render(self):
+        """(Re)draws the right-hand side from the files on disk. Safe to call any time: video and notes are untouched."""
+        if not (self.lib and self.clip_id):
+            return
+        lib, clip_id = self.lib, self.clip_id
+        m = lib.meta(clip_id) or {}
         card = lib.style_card(clip_id) if m.get("status") == "analyzed" else None
         self.title_lbl.setText((card or {}).get("name_th") or m.get("title") or "คลิปที่ไม่มีชื่อ")
         bits = [PLATFORM_LABEL.get(m.get("platform"), ""), KIND_LABEL.get(m.get("kind"), "")]
@@ -249,9 +280,13 @@ class DetailPage(QWidget):
             self.status_box.setText("กำลังโหลดคลิปนี้อยู่ รอสักครู่" if st == "downloading"
                                     else "กำลังเตรียมข้อมูลคลิปให้ Claude (จุดตัด ภาพนิ่ง เสียง) รอสักครู่")
             self.copy_btn.hide()
+        elif st == "analyzed" and card is None:
+            self.status_box.setObjectName("Warn")
+            self.status_box.setText("การ์ดสไตล์อ่านไม่ได้ — สั่ง Claude วิเคราะห์ใหม่ (กดปุ่มด้านล่างเพื่อคัดลอกคำสั่ง)")
+            self.copy_btn.show()
         elif st == "analyzed":
             self.status_box.setObjectName("Good")
-            self.status_box.setText("Claude วิเคราะห์คลิปนี้แล้ว (การ์ดสไตล์จะแสดงในเวอร์ชันถัดไป)")
+            self.status_box.setText("Claude วิเคราะห์คลิปนี้แล้ว" + (f"  ·  {card['analyzed_at'][:10]}" if card.get("analyzed_at") else ""))
             self.copy_btn.hide()
         else:
             self.status_box.setObjectName("Hint")
@@ -260,8 +295,218 @@ class DetailPage(QWidget):
         self.status_box.style().unpolish(self.status_box)
         self.status_box.style().polish(self.status_box)
 
+        self._fill_card(card)
+        self._fill_timeline(m, card)
         self._fill_info(m)
+        self._fill_extra(card)
         self.open_url_btn.setVisible(bool(m.get("source_url")))
+
+    # ---- helpers to build panels
+    @staticmethod
+    def _clear(layout):
+        while layout.count():
+            it = layout.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+            elif it.layout():
+                DetailPage._clear(it.layout())
+
+    @staticmethod
+    def _pill(text: str, blue: bool = False) -> QLabel:
+        l = QLabel(text)
+        bg, fg = (theme.ACCENT_SOFT.name(), theme.ACCENT.name()) if blue else (theme.SURFACE.name(), theme.TEXT_MID.name())
+        l.setStyleSheet(f"background:{bg}; color:{fg}; border-radius:12px; padding:4px 12px; font-weight:500;")
+        return l
+
+    def _panel(self, title: str, rows: list[tuple[str, str]], top_widget: QWidget | None = None) -> QWidget | None:
+        rows = [(k, v) for k, v in rows if v]
+        if not rows and top_widget is None:
+            return None
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        h = QLabel(title)
+        h.setObjectName("H2")
+        lay.addWidget(h)
+        frame = QFrame()
+        frame.setObjectName("Panel")
+        g = QGridLayout(frame)
+        g.setContentsMargins(16, 12, 16, 12)
+        g.setHorizontalSpacing(20)
+        g.setVerticalSpacing(10)
+        g.setColumnStretch(1, 1)
+        r = 0
+        if top_widget is not None:
+            g.addWidget(top_widget, r, 0, 1, 2)
+            r += 1
+        for k, v in rows:
+            a = QLabel(k)
+            a.setObjectName("Soft")
+            a.setAlignment(Qt.AlignmentFlag.AlignTop)
+            b = QLabel(v)
+            b.setWordWrap(True)
+            g.addWidget(a, r, 0, Qt.AlignmentFlag.AlignTop)
+            g.addWidget(b, r, 1)
+            r += 1
+        lay.addWidget(frame)
+        return box
+
+    # ---- Claude's style card
+    def _fill_card(self, card: dict | None):
+        self._clear(self.card_holder)
+        if not card:
+            return
+        head = QFrame()
+        head.setObjectName("Panel")
+        hl = QVBoxLayout(head)
+        hl.setContentsMargins(16, 14, 16, 14)
+        hl.setSpacing(10)
+        tags = QWidget()
+        tl = QHBoxLayout(tags)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(6)
+        for i, t in enumerate(card.get("tags") or []):
+            tl.addWidget(self._pill(t, blue=(i == 0)))
+        tl.addStretch(1)
+        hl.addWidget(tags)
+        if card.get("summary_th"):
+            sm = QLabel(card["summary_th"])
+            sm.setWordWrap(True)
+            hl.addWidget(sm)
+        fit = card.get("fit_for_th") or []
+        if fit:
+            f = QLabel("เหมาะกับ: " + "  ·  ".join(fit))
+            f.setObjectName("Mid")
+            f.setWordWrap(True)
+            hl.addWidget(f)
+        if card.get("engky_fit_th"):
+            e = QLabel("เหมาะกับคลิปอิงกี้: " + card["engky_fit_th"])
+            e.setObjectName("Mid")
+            e.setWordWrap(True)
+            hl.addWidget(e)
+        self.card_holder.addWidget(head)
+
+        vis = card.get("visual") or {}
+        sw = None
+        pal = [c for c in (vis.get("palette") or []) if QColor(c).isValid()]
+        if pal:
+            sw = QWidget()
+            sl = QHBoxLayout(sw)
+            sl.setContentsMargins(0, 0, 0, 0)
+            sl.setSpacing(6)
+            sl.addWidget(QLabel("สีหลัก"))
+            for c in pal[:8]:
+                d = QFrame()
+                d.setFixedSize(24, 24)
+                d.setToolTip(c)
+                d.setStyleSheet(f"background:{QColor(c).name()}; border-radius:12px; border:1px solid {theme.LINE.name()};")
+                sl.addWidget(d)
+            sl.addStretch(1)
+        w = self._panel("หน้าตาภาพ", [("ภาพรวม", vis.get("look_th") or ""), ("ตัวหนังสือ", vis.get("text_style_th") or ""),
+                                       ("การจัดวาง", vis.get("layout_th") or "")], sw)
+        if w:
+            self.card_holder.addWidget(w)
+
+        pac = card.get("pacing") or {}
+        pace_rows = []
+        if pac.get("feel_th"):
+            pace_rows.append(("ความเร็ว", pac["feel_th"]))
+        if pac.get("avg_shot_sec") is not None:
+            pace_rows.append(("ช็อตละ", f"{pac['avg_shot_sec']} วินาที (เฉลี่ย)"))
+        if pac.get("transitions_th"):
+            pace_rows.append(("ทรานซิชัน", "  ·  ".join(pac["transitions_th"])))
+        w = self._panel("จังหวะการตัดต่อ", pace_rows)
+        if w:
+            self.card_holder.addWidget(w)
+
+        aud = card.get("audio") or {}
+        sfx = aud.get("sfx_th") or []
+        lines = [f"{SC.mmss(x['t'])}  {x.get('type_th') or 'เสียงเอฟเฟกต์'}" + (f" — {x['role_th']}" if x.get("role_th") else "")
+                 for x in sfx[:8]]
+        if len(sfx) > 8:
+            lines.append(f"…และอีก {len(sfx) - 8} จุด")
+        w = self._panel("เสียง", [("เพลง", aud.get("music_th") or ""), ("เสียงพูด", aud.get("voice_th") or ""),
+                                  ("เสียงเอฟเฟกต์", "\n".join(lines))])
+        if w:
+            self.card_holder.addWidget(w)
+
+    # ---- timeline
+    def _fill_timeline(self, m: dict, card: dict | None):
+        raw = os.path.join(self.lib.clip_dir(m["id"]), "raw")
+        cuts = L.read_json(os.path.join(raw, "cuts.json"))
+        audio = L.read_json(os.path.join(raw, "audio.json"))
+        cut_list = cuts.get("cuts_sec") if isinstance(cuts, dict) and isinstance(cuts.get("cuts_sec"), list) else []
+        sfx = []
+        if isinstance(audio, dict) and isinstance(audio.get("sfx"), list):
+            labels = ((card or {}).get("audio") or {}).get("sfx_th") or []
+            for s in audio["sfx"]:
+                if not isinstance(s, dict) or not isinstance(s.get("t"), (int, float)):
+                    continue
+                near = [x for x in labels if abs(x["t"] - s["t"]) <= 0.15]
+                label = (near[0].get("type_th") if near else None) or s.get("label")
+                sfx.append({"t": s["t"], "file": s.get("file") or "", "label": label})
+        dur = m.get("duration_sec")
+        show = bool(dur) and isinstance(cuts, dict)
+        for w in (self.timeline_title, self.timeline, self.timeline_legend):
+            w.setVisible(show)
+        if show:
+            self.timeline.set_data(dur, cut_list, sfx)
+
+    def _seek_to(self, sec: float):
+        if self.player:
+            self.player.setPosition(int(sec * 1000))
+        self.timeline.set_position(sec)
+
+    def _play_sfx(self, rel: str):
+        if not (rel and self.lib and self.clip_id) or os.environ.get("STYLEVAULT_NO_MEDIA"):
+            return
+        path = os.path.join(self.lib.clip_dir(self.clip_id), "raw", rel)
+        if not os.path.isfile(path):
+            return
+        try:
+            from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
+            if not QMediaDevices.audioOutputs():
+                return
+            if getattr(self, "_sfx_player", None) is None:
+                self._sfx_player = QSoundEffect(self)
+            self._sfx_player.setSource(QUrl.fromLocalFile(path))
+            self._sfx_player.play()
+        except Exception:
+            pass
+
+    # ---- structure + Remotion recipe + limits
+    def _fill_extra(self, card: dict | None):
+        self._clear(self.extra_holder)
+        if not card:
+            return
+        st = card.get("structure") or []
+        if st:
+            rows = [(f"{x['from']:g}–{x['to']:g} วินาที", x.get("beat_th") or "") for x in st]
+            w = self._panel("โครงเรื่อง", rows)
+            if w:
+                self.extra_holder.addWidget(w)
+        rec = card.get("remotion_recipe") or {}
+        if rec:
+            rows = []
+            fps, sf = rec.get("fps"), rec.get("shot_frames")
+            if fps:
+                rows.append(("ความเร็วภาพ", f"{fps:g} ภาพต่อวินาที"))
+            if sf:
+                rows.append(("ความยาวต่อช็อต", f"{sf:g} เฟรม" + (f" (ประมาณ {sf / fps:.1f} วินาที)" if fps else "")))
+            rows.append(("ข้อความขึ้นแบบ", SC.thai_choice(rec.get("text_anim"), SC.TEXT_ANIM_TH)))
+            rows.append(("ทรานซิชัน", SC.thai_choice(rec.get("transition"), SC.TRANSITION_TH)))
+            rows.append(("กฎการใส่เสียง", rec.get("sfx_rule_th") or ""))
+            rows.append(("หมายเหตุ", rec.get("notes_th") or ""))
+            w = self._panel("สูตรตัดต่อ (สำหรับ Remotion)", rows)
+            if w:
+                self.extra_holder.addWidget(w)
+        lim = card.get("limits_th") or []
+        if lim:
+            l = QLabel("ข้อจำกัดของการวิเคราะห์นี้\n" + "\n".join("• " + x for x in lim))
+            l.setObjectName("Hint")
+            l.setWordWrap(True)
+            self.extra_holder.addWidget(l)
 
     def _fill_info(self, m: dict):
         while self.info_grid.count():

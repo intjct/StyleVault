@@ -206,8 +206,10 @@ class Library:
                        {"updated_at": now_iso(), "app_version": VERSION, "clips": items})
 
     def style_card(self, clip_id: str) -> dict | None:
+        """Claude's card, or None when it is missing, broken or the wrong shape (never raises)."""
+        from . import stylecard
         c = read_json(os.path.join(self.clip_dir(clip_id), "style-card.json"))
-        return c if isinstance(c, dict) else None
+        return c if isinstance(c, dict) and not stylecard.validate(c) else None
 
 
 def fmt_views(n) -> str:
