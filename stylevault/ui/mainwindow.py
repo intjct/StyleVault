@@ -14,6 +14,7 @@ from . import dialogs, theme
 from .detail_page import DetailPage
 from .library_page import LibraryPage
 from .settings_page import COPYRIGHT_TH, SettingsPage
+from .update_bar import UpdateBar
 
 
 class MainWindow(QWidget):
@@ -38,8 +39,12 @@ class MainWindow(QWidget):
         self.settings_page = SettingsPage(self.s)
         for w in (self.library_page, self.detail, self.settings_page):
             self.stack.addWidget(w)
+        self.update_bar = UpdateBar(is_busy=lambda: bool(self.jobs._active))
+        self.settings_page.update_bar = self.update_bar
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.update_bar)
         lay.addWidget(self.stack)
 
         self.library_page.add_link.connect(self.add_link)
@@ -60,6 +65,8 @@ class MainWindow(QWidget):
         self.library_page.set_library(self.lib)
         self.lib.rebuild_index()
         self._recover()
+        if not os.environ.get("STYLEVAULT_NO_UPDATE_CHECK"):
+            self.update_bar.check_later()
 
     def _recover(self):
         """Clips left half-done (program closed mid-way) and clips from older versions that have no raw data yet."""

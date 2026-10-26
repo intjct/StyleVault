@@ -3,7 +3,7 @@
 ; the settings and the library (they live in %APPDATA% and Documents, not in the program folder).
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
 
 [Setup]
@@ -37,6 +37,14 @@ Name: "{userdesktop}\StyleVault"; Filename: "{app}\StyleVault.exe"; Tasks: deskt
 
 [Run]
 Filename: "{app}\StyleVault.exe"; Description: "Open StyleVault now"; Flags: nowait postinstall skipifsilent
+; Update from inside the program runs this installer quietly with /RELAUNCH=1: open the program again afterwards.
+Filename: "{app}\StyleVault.exe"; Flags: nowait runasoriginaluser; Check: Relaunch
+
+[Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM StyleVault.exe"; Flags: runhidden; RunOnceId: "StopStyleVault"

@@ -108,6 +108,16 @@ class SettingsPage(QWidget):
         self.ver = QLabel(f"StyleVault เวอร์ชัน {VERSION}")
         self.ver.setObjectName("Soft")
         root.addWidget(self.ver)
+        urow = QHBoxLayout()
+        self.check_btn = QPushButton("เช็กเวอร์ชันใหม่")
+        self.check_btn.clicked.connect(self._check_update)
+        self.check_msg = QLabel("")
+        self.check_msg.setObjectName("Soft")
+        urow.addWidget(self.check_btn)
+        urow.addWidget(self.check_msg)
+        urow.addStretch(1)
+        root.addLayout(urow)
+        self.update_bar = None
         root.addStretch(1)
 
     def _h(self, text):
@@ -149,6 +159,13 @@ class SettingsPage(QWidget):
         self.up_btn.setEnabled(True)
         self.up_msg.setText(msg)
         self.dl_lbl.setText(f"เวอร์ชันตัวโหลดคลิป: {tools.ytdlp_version()}")
+
+    def _check_update(self):
+        if not self.update_bar:
+            return
+        self.check_msg.setText("กำลังเช็ก…")
+        self.update_bar.result_cb = self.check_msg.setText
+        self.update_bar.check(manual=True)
 
     def _login_toggled(self, on: bool, save: bool = True):
         self.login_warn.setVisible(on)
