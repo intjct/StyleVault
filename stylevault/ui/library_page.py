@@ -119,7 +119,7 @@ class LibraryPage(QWidget):
         k = self.filter_key
         if k in ("effects", "viral") and m.get("kind") != k:
             return False
-        if k == "waiting" and m.get("status") not in ("waiting", "downloading"):
+        if k == "waiting" and m.get("status") not in ("waiting", "downloading", "preparing"):
             return False
         if self.query:
             hay = " ".join([m.get("title") or "", m.get("uploader") or "",
@@ -131,7 +131,7 @@ class LibraryPage(QWidget):
         if not self.lib:
             return
         metas = self.lib.list_meta()
-        waiting = sum(1 for m in metas if m.get("status") in ("waiting", "downloading"))
+        waiting = sum(1 for m in metas if m.get("status") in ("waiting", "downloading", "preparing"))
         for key, (b, name) in self.chip.items():
             n = {"all": len(metas), "effects": sum(1 for m in metas if m.get("kind") == "effects"),
                  "viral": sum(1 for m in metas if m.get("kind") == "viral"), "waiting": waiting}[key]

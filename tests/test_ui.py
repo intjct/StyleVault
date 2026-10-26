@@ -148,3 +148,17 @@ def test_broken_style_card_shows_message_not_crash(app, tmp_path):
     card = w.library_page.grid.cards[0]
     assert "อ่านไม่ได้" in card._title()[0]
     w.open_clip(cid)
+
+
+def test_old_clips_without_raw_data_get_prepared_on_start(app, tmp_path):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg")
+    lib = L.Library(str(tmp_path / "lib"))
+    cid = lib.create_clip("file", "old1", "effects", None, status="waiting")     # made by v0.1: no raw/ yet
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=360x640:rate=30:duration=2",
+                    "-pix_fmt", "yuv420p", os.path.join(lib.clip_dir(cid), "video.mp4")], check=True)
+    dead = lib.create_clip("tiktok", "dead1", "viral", "https://x", status="downloading")   # app was closed mid-download
+    w = make_window(tmp_path)
+    assert wait_until(app, lambda: (w.lib.meta(cid) or {}).get("raw_ready") is True)
+    assert w.lib.meta(cid)["status"] == "waiting"
+    assert w.lib.meta(dead)["status"] == "error" and "ลองใหม่" in w.lib.meta(dead)["error"]

@@ -73,6 +73,14 @@ def selftest() -> int:
         lib.rebuild_index()
         if not os.path.isfile(os.path.join(lib.root, "library-index.json")):
             raise RuntimeError("no library-index.json")
+        raw = os.path.join(lib.clip_dir(cid), "raw")
+        for need in ("cuts.json", "audio.json", "contact-sheet.jpg", "waveform.png"):
+            if not os.path.isfile(os.path.join(raw, need)):
+                raise RuntimeError(f"raw/{need} missing")
+        if not os.listdir(os.path.join(raw, "frames")) or not m.get("raw_ready"):
+            raise RuntimeError("no frames / raw not ready")
+        if not os.path.isfile(os.path.join(lib.root, "CLAUDE-README.md")):
+            raise RuntimeError("no CLAUDE-README.md")
         return f"{cid} {m['duration_sec']}s {m['width']}x{m['height']}"
 
     def original_untouched():

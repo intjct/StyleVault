@@ -175,6 +175,19 @@ class Library:
             shutil.rmtree(d, ignore_errors=True)
         self.rebuild_index()
 
+    def write_readme(self) -> None:
+        """Leaves CLAUDE-README.md in the library (rewritten when the program version changes)."""
+        from .claude_readme import TEXT
+        path = os.path.join(self.root, "CLAUDE-README.md")
+        try:
+            with open(path, encoding="utf-8") as f:
+                if f.read() == TEXT:
+                    return
+        except OSError:
+            pass
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(TEXT)
+
     # ---- index for Claude
     def rebuild_index(self) -> None:
         items = []
@@ -187,6 +200,7 @@ class Library:
                 "name_th": card.get("name_th"), "tags": card.get("tags") or [],
                 "summary_th": card.get("summary_th"), "fit_for_th": card.get("fit_for_th") or [],
             })
+        self.write_readme()
         with _lock:
             write_json(os.path.join(self.root, "library-index.json"),
                        {"updated_at": now_iso(), "app_version": VERSION, "clips": items})

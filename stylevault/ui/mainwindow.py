@@ -59,6 +59,26 @@ class MainWindow(QWidget):
 
         self.library_page.set_library(self.lib)
         self.lib.rebuild_index()
+        self._recover()
+
+    def _recover(self):
+        """Clips left half-done (program closed mid-way) and clips from older versions that have no raw data yet."""
+        for m in self.lib.list_meta():
+            cid, st = m["id"], m.get("status")
+            if self.jobs.is_active(cid):
+                continue
+            if st in ("downloading", "preparing"):
+                if self.lib.video_path(cid):
+                    self.lib.update_meta(cid, status="preparing", error=None)
+                    self.jobs.add_prepare(cid)
+                else:
+                    self.lib.update_meta(cid, status="error",
+                                         error="โปรแกรมถูกปิดก่อนโหลดคลิปเสร็จ — กดลองใหม่ (คลิกขวาที่การ์ด)")
+            elif st in ("waiting", "analyzed") and not m.get("raw_ready") and self.lib.video_path(cid):
+                if st == "waiting":
+                    self.lib.update_meta(cid, status="preparing")
+                self.jobs.add_prepare(cid)
+        self.library_page.refresh()
 
     # ---- navigation
     def show_library(self):
@@ -78,6 +98,7 @@ class MainWindow(QWidget):
         self.lib = L.Library(self.s.library_path())
         self.library_page.set_library(self.lib)
         self.lib.rebuild_index()
+        self._recover()
 
     # ---- adding clips
     def add_link(self, text: str):
@@ -160,12 +181,14 @@ class MainWindow(QWidget):
         elif act is a_dir:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.lib.clip_dir(clip_id)))
         elif act is a_retry:
-            self.lib.update_meta(clip_id, status="downloading", error=None)
-            if m.get("source_url"):
+            if self.lib.video_path(clip_id):                       # video is there: only the data prep failed
+                self.lib.update_meta(clip_id, status="preparing", error=None)
+                self.jobs.add_prepare(clip_id)
+            elif m.get("source_url"):
+                self.lib.update_meta(clip_id, status="downloading", error=None)
                 self.jobs.add_link(clip_id, m["source_url"])
             else:
                 dialogs.message(self, "ลองใหม่ไม่ได้", "คลิปนี้มาจากไฟล์ ให้ลบแล้วลากไฟล์มาวางใหม่")
-                self.lib.update_meta(clip_id, status="error", error=m.get("error"))
         elif act is a_del:
             if dialogs.message(self, "ลบคลิปนี้ออกจากคลัง?",
                                "คลิปนี้และข้อมูลที่เกี่ยวข้อง (โน้ต การ์ดสไตล์) จะถูกลบออกจากโฟลเดอร์คลัง\n"

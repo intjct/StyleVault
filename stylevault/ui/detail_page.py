@@ -8,6 +8,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QScrollArea,
                                QSlider, QVBoxLayout, QWidget)
 
+from .. import library as L
 from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views
 from . import theme
 
@@ -243,9 +244,10 @@ class DetailPage(QWidget):
             self.status_box.setObjectName("Warn")
             self.status_box.setText(m.get("error") or "โหลดคลิปไม่สำเร็จ")
             self.copy_btn.hide()
-        elif st == "downloading":
+        elif st in ("downloading", "preparing"):
             self.status_box.setObjectName("Hint")
-            self.status_box.setText("กำลังโหลดคลิปนี้อยู่ รอสักครู่")
+            self.status_box.setText("กำลังโหลดคลิปนี้อยู่ รอสักครู่" if st == "downloading"
+                                    else "กำลังเตรียมข้อมูลคลิปให้ Claude (จุดตัด ภาพนิ่ง เสียง) รอสักครู่")
             self.copy_btn.hide()
         elif st == "analyzed":
             self.status_box.setObjectName("Good")
@@ -274,6 +276,19 @@ class DetailPage(QWidget):
             ("ขนาดภาพ", f"{m['width']} × {m['height']}" if m.get("width") else None),
             ("เพิ่มเข้าคลังเมื่อ", (m.get("added_at") or "")[:16].replace("T", " ") or None),
         ]
+        cuts = L.read_json(os.path.join(self.lib.clip_dir(m["id"]), "raw", "cuts.json")) if self.lib else None
+        audio = L.read_json(os.path.join(self.lib.clip_dir(m["id"]), "raw", "audio.json")) if self.lib else None
+        if isinstance(cuts, dict):
+            rows.append(("จุดตัดภาพ", f"{cuts.get('cut_count', 0)} จุด (เฉลี่ยช็อตละ {cuts.get('avg_shot_sec', '—')} วินาที)"))
+        if isinstance(audio, dict):
+            if not audio.get("has_audio"):
+                rows.append(("เสียง", "ไม่มีเสียง"))
+            else:
+                bpm = audio.get("bpm")
+                rows.append(("จังหวะเพลง (ครั้งต่อนาที)", str(bpm) if bpm else "จับจังหวะที่ชัดเจนไม่ได้"))
+                rows.append(("เสียงกระแทกที่จับได้", f"{len(audio.get('onsets_sec') or [])} จุด"))
+                rows.append(("เสียงเงียบ", "ไม่มีช่วงเงียบเลย (มีเพลงหรือเสียงคลอตลอด)" if not audio.get("silences")
+                             else f"{len(audio['silences'])} ช่วง"))
         for i, (k, val) in enumerate(rows):
             a = QLabel(k)
             a.setObjectName("Soft")

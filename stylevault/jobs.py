@@ -32,6 +32,9 @@ class Jobs(QObject):
     def add_file(self, clip_id: str, path: str):
         self._enqueue(("file", clip_id, path))
 
+    def add_prepare(self, clip_id: str):
+        self._enqueue(("prepare", clip_id, None))
+
     def _enqueue(self, job):
         self._active.add(job[1])
         self._q.put((self._lib(), self._settings(), job))
@@ -44,7 +47,13 @@ class Jobs(QObject):
             def prog(frac, text, cid=clip_id):
                 self.progress.emit(cid, frac, text)
             try:
-                if kind == "link":
+                if kind == "prepare":
+                    from . import prepare
+                    try:
+                        prepare.prepare(lib, clip_id, prog)
+                    except prepare.PrepareError as e:
+                        raise ingest.IngestError(str(e))
+                elif kind == "link":
                     ingest.download(lib, clip_id, arg, settings, prog)
                 else:
                     ingest.add_file(lib, clip_id, arg, prog)

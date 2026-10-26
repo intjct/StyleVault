@@ -57,7 +57,7 @@ class Card(QWidget):
     def set_data(self, meta: dict, card: dict | None, thumb: str | None):
         self.meta, self.card = meta, card
         self.pix = QPixmap(thumb) if thumb else None
-        if meta.get("status") != "downloading":
+        if meta.get("status") not in ("downloading", "preparing"):
             self.progress = None
         err = meta.get("error")
         self.setToolTip(err if meta.get("status") == "error" and err else "")
@@ -97,7 +97,8 @@ class Card(QWidget):
             p.setFont(theme.font(12))
             p.drawText(img, Qt.AlignmentFlag.AlignCenter, "ยังไม่มีภาพปก")
         status = self.meta.get("status")
-        if status == "downloading":
+        busy = status in ("downloading", "preparing")
+        if busy:
             p.fillRect(QRectF(0, ih - 4, w, 4), theme.LINE)
             p.fillRect(QRectF(0, ih - 4, w * (self.progress or 0.03), 4), theme.ACCENT)
         p.restore()
@@ -120,8 +121,8 @@ class Card(QWidget):
 
     def _title(self):
         s = self.meta.get("status")
-        if s == "downloading":
-            return (self.status_text or "กำลังโหลด…"), theme.TEXT_MID
+        if s in ("downloading", "preparing"):
+            return (self.status_text or ("กำลังโหลด…" if s == "downloading" else "กำลังเตรียมข้อมูล…")), theme.TEXT_MID
         if s == "error":
             return (self.meta.get("error") or "โหลดไม่สำเร็จ"), theme.RED
         if s == "analyzed" and self.card and self.card.get("name_th"):
@@ -154,7 +155,7 @@ class Card(QWidget):
             return
         f = theme.font(11, theme.MEDIUM)
         tw = QFontMetrics(f).horizontalAdvance(v)
-        r = QRectF(8, ih - 8 - 22 - (4 if self.meta.get("status") == "downloading" else 0), tw + 36, 22)
+        r = QRectF(8, ih - 8 - 22 - (4 if self.meta.get("status") in ("downloading", "preparing") else 0), tw + 36, 22)
         path = QPainterPath()
         path.addRoundedRect(r, 11, 11)
         p.fillPath(path, QColor(0, 0, 0, 150))

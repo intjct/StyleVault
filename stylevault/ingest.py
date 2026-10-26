@@ -166,12 +166,16 @@ def make_thumb(video: str, thumb: str, duration: float | None) -> bool:
 
 
 def finish(lib: Library, clip_id: str, video: str, progress) -> None:
-    progress(0.93, "กำลังทำภาพปก…")
+    progress(0.9, "กำลังทำภาพปก…")
     info = probe(video)
     meta = lib.meta(clip_id) or {}
     dur = info.get("duration_sec") or meta.get("duration_sec")
     make_thumb(video, os.path.join(lib.clip_dir(clip_id), "thumb.jpg"), dur)
     changes = {k: v for k, v in info.items() if v is not None}
-    lib.update_meta(clip_id, video_file=os.path.basename(video), status="waiting", error=None, **changes)
+    lib.update_meta(clip_id, video_file=os.path.basename(video), status="preparing", error=None, **changes)
     lib.rebuild_index()
-    progress(1.0, "เสร็จแล้ว")
+    from . import prepare
+    try:
+        prepare.prepare(lib, clip_id, lambda f, t: progress(0.9 + 0.1 * f, t))   # raw data for Claude; sets status to "waiting"
+    except prepare.PrepareError as e:
+        raise IngestError(str(e))
