@@ -1,0 +1,292 @@
+"""Clip detail: playable video, my notes, and clip info. (Style card + timeline arrive in v0.3.)"""
+from __future__ import annotations
+
+import os
+
+from PySide6.QtCore import QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QScrollArea,
+                               QSlider, QVBoxLayout, QWidget)
+
+from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views
+from . import theme
+
+VIDEO_W = 288
+VIDEO_H = 512
+
+
+def _fmt_time(sec: float) -> str:
+    sec = int(max(0, sec))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+class DetailPage(QWidget):
+    back = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("Page")
+        self.lib: Library | None = None
+        self.clip_id: str | None = None
+        self.player = None
+        self._dirty = False
+        self._save_timer = QTimer(self, singleShot=True, interval=600, timeout=self._save_notes)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 18, 28, 0)
+        root.setSpacing(14)
+        b = QPushButton("←  กลับไปคลังสไตล์")
+        b.setObjectName("Link")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.clicked.connect(self.back)
+        root.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
+
+        body = QHBoxLayout()
+        body.setSpacing(28)
+        body.setContentsMargins(0, 0, 0, 24)
+        body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        page_scroll = QScrollArea()                    # the whole page scrolls on short windows
+        page_scroll.setWidgetResizable(True)
+        page_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body_holder = QWidget()
+        body_holder.setLayout(body)
+        page_scroll.setWidget(body_holder)
+        root.addWidget(page_scroll, 1)
+
+        # ---- left column
+        left = QVBoxLayout()
+        left.setSpacing(10)
+        self.video_box = QFrame()
+        self.video_box.setFixedSize(VIDEO_W, VIDEO_H)
+        self.video_box.setStyleSheet("background:#0E1014; border-radius:10px;")
+        vb = QVBoxLayout(self.video_box)
+        vb.setContentsMargins(0, 0, 0, 0)
+        self._setup_player(vb)
+        left.addWidget(self.video_box)
+        ctl = QHBoxLayout()
+        self.play_btn = QPushButton("เล่น")
+        self.play_btn.setFixedWidth(64)
+        self.play_btn.clicked.connect(self._toggle)
+        ctl.addWidget(self.play_btn)
+        self.seek = QSlider(Qt.Orientation.Horizontal)
+        self.seek.sliderMoved.connect(lambda v: self.player and self.player.setPosition(v))
+        ctl.addWidget(self.seek, 1)
+        self.time_lbl = QLabel("0:00")
+        self.time_lbl.setObjectName("Soft")
+        self.time_lbl.setMinimumWidth(70)
+        ctl.addWidget(self.time_lbl)
+        left.addLayout(ctl)
+        nl = QLabel("โน้ตของแตม")
+        nl.setObjectName("H2")
+        left.addWidget(nl)
+        self.notes = QPlainTextEdit()
+        self.notes.setPlaceholderText("จดไว้ว่าคลิปนี้เด่นตรงไหน หรืออยากให้ Claude สังเกตอะไร (บันทึกให้อัตโนมัติ)")
+        self.notes.setFixedHeight(96)
+        self.notes.textChanged.connect(self._on_notes)
+        left.addWidget(self.notes)
+        body.addLayout(left)
+
+        # ---- right column (scrolls)
+        self.right = QVBoxLayout()
+        self.right.setSpacing(16)
+        self.right.setAlignment(Qt.AlignmentFlag.AlignTop)
+        body.addLayout(self.right, 1)
+
+        self.badges = QLabel()
+        self.badges.setObjectName("Soft")
+        self.title_lbl = QLabel()
+        self.title_lbl.setObjectName("Title")
+        self.title_lbl.setWordWrap(True)
+        self.right.addWidget(self.title_lbl)
+        self.right.addWidget(self.badges)
+
+        self.status_box = QLabel()
+        self.status_box.setWordWrap(True)
+        self.status_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.right.addWidget(self.status_box)
+        self.copy_btn = QPushButton("คัดลอกข้อความ \"วิเคราะห์คลิปใหม่\"")
+        self.copy_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText("วิเคราะห์คลิปใหม่"))
+        self.right.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignLeft)
+
+        h = QLabel("ข้อมูลคลิป")
+        h.setObjectName("H2")
+        self.right.addWidget(h)
+        self.info = QFrame()
+        self.info.setObjectName("Panel")
+        self.info_grid = QGridLayout(self.info)
+        self.info_grid.setContentsMargins(16, 12, 16, 12)
+        self.info_grid.setHorizontalSpacing(20)
+        self.info_grid.setVerticalSpacing(10)
+        self.info_grid.setColumnStretch(1, 1)
+        self.right.addWidget(self.info)
+
+        btns = QHBoxLayout()
+        self.open_url_btn = QPushButton("เปิดลิงก์ต้นฉบับ")
+        self.open_url_btn.clicked.connect(self._open_source)
+        self.open_dir_btn = QPushButton("เปิดโฟลเดอร์คลิป")
+        self.open_dir_btn.clicked.connect(self._open_folder)
+        btns.addWidget(self.open_url_btn)
+        btns.addWidget(self.open_dir_btn)
+        btns.addStretch(1)
+        self.right.addLayout(btns)
+
+    # ---- player (Qt Multimedia; fails soft if the system has no video support)
+    def _setup_player(self, layout):
+        try:
+            if os.environ.get("STYLEVAULT_NO_MEDIA"):          # tests / servers without sound or video support
+                raise RuntimeError("media off")
+            from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
+            from PySide6.QtMultimediaWidgets import QVideoWidget
+            self.video = QVideoWidget()
+            self.video.setStyleSheet("background:#0E1014;")
+            layout.addWidget(self.video)
+            self.player = QMediaPlayer(self)
+            if QMediaDevices.audioOutputs():          # a PC with no speakers must not crash the page
+                self.audio = QAudioOutput(self)
+                self.player.setAudioOutput(self.audio)
+            self.player.setVideoOutput(self.video)
+            self.player.positionChanged.connect(self._on_pos)
+            self.player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
+            self.player.playbackStateChanged.connect(
+                lambda s: self.play_btn.setText("หยุด" if s == QMediaPlayer.PlaybackState.PlayingState else "เล่น"))
+            self.player.mediaStatusChanged.connect(self._on_media_status)
+        except Exception:
+            self.player = None
+            self.fallback = QLabel("เครื่องนี้เล่นวิดีโอในโปรแกรมไม่ได้")
+            self.fallback.setStyleSheet("color:white; background:transparent;")
+            self.fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(self.fallback)
+
+    def _on_media_status(self, st):
+        from PySide6.QtMultimedia import QMediaPlayer
+        if st == QMediaPlayer.MediaStatus.InvalidMedia:
+            self.play_btn.setText("เล่น")
+
+    def _on_pos(self, pos):
+        if not self.seek.isSliderDown():
+            self.seek.setValue(pos)
+        dur = self.player.duration() if self.player else 0
+        self.time_lbl.setText(f"{_fmt_time(pos / 1000)} / {_fmt_time(dur / 1000)}")
+
+    def _toggle(self):
+        if not self.player:
+            return
+        from PySide6.QtMultimedia import QMediaPlayer
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    # ---- notes
+    def _on_notes(self):
+        if self.clip_id:
+            self._dirty = True
+            self._save_timer.start()
+
+    def _save_notes(self):
+        if self.lib and self.clip_id and self._dirty:
+            try:
+                with open(self.lib.notes_path(self.clip_id), "w", encoding="utf-8") as f:
+                    f.write(self.notes.toPlainText())
+                self._dirty = False
+            except OSError:
+                pass
+
+    def leave(self):
+        """Call before leaving the page: saves notes and stops the video."""
+        self._save_timer.stop()
+        self._save_notes()
+        if self.player:
+            self.player.stop()
+            self.player.setSource(QUrl())
+
+    # ---- show
+    def show_clip(self, lib: Library, clip_id: str):
+        self.leave()
+        self.lib, self.clip_id = lib, clip_id
+        m = lib.meta(clip_id) or {}
+        self._dirty = False
+        self.notes.blockSignals(True)
+        try:
+            with open(lib.notes_path(clip_id), encoding="utf-8") as f:
+                self.notes.setPlainText(f.read())
+        except OSError:
+            self.notes.setPlainText("")
+        self.notes.blockSignals(False)
+
+        v = lib.video_path(clip_id)
+        if not self.player and hasattr(self, "fallback"):      # no video support: show the cover picture instead
+            t = lib.thumb_path(clip_id)
+            if t:
+                from PySide6.QtGui import QPixmap
+                self.fallback.setPixmap(QPixmap(t).scaled(VIDEO_W, VIDEO_H, Qt.AspectRatioMode.KeepAspectRatio,
+                                                           Qt.TransformationMode.SmoothTransformation))
+        if self.player and v:
+            self.player.setSource(QUrl.fromLocalFile(v))
+            self.play_btn.setEnabled(True)
+        else:
+            self.play_btn.setEnabled(False)
+        self.seek.setValue(0)
+
+        card = lib.style_card(clip_id) if m.get("status") == "analyzed" else None
+        self.title_lbl.setText((card or {}).get("name_th") or m.get("title") or "คลิปที่ไม่มีชื่อ")
+        bits = [PLATFORM_LABEL.get(m.get("platform"), ""), KIND_LABEL.get(m.get("kind"), "")]
+        if m.get("view_count") is not None:
+            bits.append(f"วิว {fmt_views(m['view_count'])}")
+        if m.get("like_count") is not None:
+            bits.append(f"ไลก์ {fmt_views(m['like_count'])}")
+        self.badges.setText("   ·   ".join(b for b in bits if b))
+
+        st = m.get("status")
+        if st == "error":
+            self.status_box.setObjectName("Warn")
+            self.status_box.setText(m.get("error") or "โหลดคลิปไม่สำเร็จ")
+            self.copy_btn.hide()
+        elif st == "downloading":
+            self.status_box.setObjectName("Hint")
+            self.status_box.setText("กำลังโหลดคลิปนี้อยู่ รอสักครู่")
+            self.copy_btn.hide()
+        elif st == "analyzed":
+            self.status_box.setObjectName("Good")
+            self.status_box.setText("Claude วิเคราะห์คลิปนี้แล้ว (การ์ดสไตล์จะแสดงในเวอร์ชันถัดไป)")
+            self.copy_btn.hide()
+        else:
+            self.status_box.setObjectName("Hint")
+            self.status_box.setText("คลิปนี้พร้อมให้ Claude วิเคราะห์แล้ว\nพิมพ์ในแชต Claude ว่า \"วิเคราะห์คลิปใหม่\"")
+            self.copy_btn.show()
+        self.status_box.style().unpolish(self.status_box)
+        self.status_box.style().polish(self.status_box)
+
+        self._fill_info(m)
+        self.open_url_btn.setVisible(bool(m.get("source_url")))
+
+    def _fill_info(self, m: dict):
+        while self.info_grid.count():
+            it = self.info_grid.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        dur = m.get("duration_sec")
+        rows = [
+            ("ช่อง / ผู้โพสต์", m.get("uploader")),
+            ("วันที่โพสต์", m.get("upload_date")),
+            ("ความยาว", f"{dur:.0f} วินาที" if isinstance(dur, (int, float)) else None),
+            ("ขนาดภาพ", f"{m['width']} × {m['height']}" if m.get("width") else None),
+            ("เพิ่มเข้าคลังเมื่อ", (m.get("added_at") or "")[:16].replace("T", " ") or None),
+        ]
+        for i, (k, val) in enumerate(rows):
+            a = QLabel(k)
+            a.setObjectName("Soft")
+            b = QLabel(str(val) if val else "—")
+            b.setWordWrap(True)
+            self.info_grid.addWidget(a, i, 0)
+            self.info_grid.addWidget(b, i, 1)
+
+    def _open_source(self):
+        m = (self.lib.meta(self.clip_id) if self.lib and self.clip_id else None) or {}
+        if m.get("source_url"):
+            QDesktopServices.openUrl(QUrl(m["source_url"]))
+
+    def _open_folder(self):
+        if self.lib and self.clip_id:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.lib.clip_dir(self.clip_id)))

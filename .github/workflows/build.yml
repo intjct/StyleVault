@@ -1,0 +1,104 @@
+# Every push to "main" builds StyleVault on a real Windows machine, tests it,
+# and publishes the installer + portable zip on the Releases page.
+name: Build StyleVault for Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pyinstaller>=6.10" pytest
+
+      - name: Download ffmpeg, ffprobe and yt-dlp
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            try { Invoke-WebRequest $u -OutFile ffmpeg.zip -TimeoutSec 300; $ok = $true; break }
+            catch { Write-Host "Download failed from $u, trying next..." }
+          }
+          if (-not $ok) { throw "Could not download ffmpeg" }
+          Expand-Archive ffmpeg.zip -DestinationPath tools_tmp
+          New-Item -ItemType Directory -Force build_tools | Out-Null
+          Get-ChildItem tools_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | Copy-Item -Destination build_tools\ffmpeg.exe
+          Get-ChildItem tools_tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1 | Copy-Item -Destination build_tools\ffprobe.exe
+          $lic = Get-ChildItem tools_tmp -Recurse -Include LICENSE*, COPYING* | Select-Object -First 1
+          if ($lic) { Copy-Item $lic.FullName build_tools\FFMPEG-LICENSE.txt }
+          Invoke-WebRequest "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile build_tools\yt-dlp.exe -TimeoutSec 300
+          & build_tools\ffmpeg.exe -hide_banner -version | Select-Object -First 1
+          & build_tools\yt-dlp.exe --version
+
+      - name: Run tests
+        run: |
+          $env:PATH = "$PWD\build_tools;$env:PATH"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:STYLEVAULT_NO_MEDIA = "1"
+          python -m pytest -q tests
+
+      - name: Build StyleVault.exe
+        run: pyinstaller stylevault.spec --noconfirm
+
+      - name: Self-test the finished program
+        run: |
+          $p = Start-Process -FilePath "dist\StyleVault\StyleVault.exe" -ArgumentList "--selftest" -PassThru
+          if (-not $p.WaitForExit(300000)) { $p.Kill(); throw "selftest timed out" }
+          Get-Content "$env:TEMP\stylevault-selftest.txt"
+          if ($p.ExitCode -ne 0) { throw "selftest failed" }
+
+      - name: Read version
+        id: ver
+        run: |
+          $v = python -c "import stylevault; print(stylevault.VERSION)"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Make portable zip
+        run: Compress-Archive -Path dist\StyleVault -DestinationPath "StyleVault-${{ steps.ver.outputs.version }}-portable.zip"
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\stylevault.iss
+          if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StyleVault-${{ steps.ver.outputs.version }}
+          path: |
+            installer/Output/*.exe
+            *.zip
+
+      - name: Publish on the Releases page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          $files = @((Get-ChildItem installer\Output\*.exe).FullName) + @((Get-ChildItem *.zip).FullName)
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "StyleVault $tag" --notes-file RELEASE_NOTES.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw "release upload failed" }
