@@ -52,6 +52,8 @@ class MainWindow(QWidget):
         self.library_page.clip_menu.connect(self.clip_menu)
         self.library_page.open_settings.connect(self.open_settings)
         self.detail.back.connect(self.show_library)
+        self.detail.delete_requested.connect(self.delete_clip)
+        self.detail.retry_requested.connect(self.retry_clip)
         self.settings_page.back.connect(self.show_library)
         self.settings_page.library_changed.connect(self._library_changed)
 
@@ -224,24 +226,39 @@ class MainWindow(QWidget):
         elif act is a_dir:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.lib.clip_dir(clip_id)))
         elif act is a_retry:
-            if self.lib.video_path(clip_id):                       # video is there: only the data prep failed
-                self.lib.update_meta(clip_id, status="preparing", error=None)
-                self.jobs.add_prepare(clip_id)
-            elif m.get("source_url"):
-                self.lib.update_meta(clip_id, status="downloading", error=None)
-                self.jobs.add_link(clip_id, m["source_url"])
-            else:
-                dialogs.message(self, "ลองใหม่ไม่ได้", "คลิปนี้มาจากไฟล์ ให้ลบแล้วลากไฟล์มาวางใหม่")
+            self.retry_clip(clip_id)
         elif act is a_del:
-            if dialogs.message(self, "ลบคลิปนี้ออกจากคลัง?",
+            self.delete_clip(clip_id)
+
+    def retry_clip(self, clip_id: str):
+        m = self.lib.meta(clip_id) or {}
+        if self.jobs.is_active(clip_id):
+            return
+        if self.lib.video_path(clip_id):                           # video is there: only the data prep failed
+            self.lib.update_meta(clip_id, status="preparing", error=None, error_detail=None)
+            self.jobs.add_prepare(clip_id)
+        elif m.get("source_url"):
+            self.lib.update_meta(clip_id, status="downloading", error=None, error_detail=None)
+            self.jobs.add_link(clip_id, m["source_url"])
+        else:
+            dialogs.message(self, "ลองใหม่ไม่ได้", "คลิปนี้มาจากไฟล์ ให้ลบแล้วลากไฟล์มาวางใหม่")
+        self.library_page.refresh()
+        if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
+            self.detail.render()
+
+    def delete_clip(self, clip_id: str):
+        if not dialogs.message(self, "ลบคลิปนี้ออกจากคลัง?",
                                "คลิปนี้และข้อมูลที่เกี่ยวข้อง (โน้ต การ์ดสไตล์) จะถูกลบออกจากโฟลเดอร์คลัง\n"
                                "ไฟล์ต้นฉบับที่คุณเคยลากมาวางจะไม่ถูกแตะต้อง",
                                "ลบ", "ยกเลิก"):
-                if self.jobs.is_active(clip_id):
-                    dialogs.message(self, "ยังลบไม่ได้", "คลิปนี้กำลังโหลดอยู่ รอให้เสร็จก่อนแล้วค่อยลบ")
-                    return
-                self.lib.delete_clip(clip_id)
-                self.library_page.refresh()
+            return
+        if self.jobs.is_active(clip_id):
+            dialogs.message(self, "ยังลบไม่ได้", "คลิปนี้กำลังโหลดอยู่ รอให้เสร็จก่อนแล้วค่อยลบ")
+            return
+        self.lib.delete_clip(clip_id)
+        if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
+            self.show_library()
+        self.library_page.refresh()
 
     # ---- drag & drop of video files anywhere in the window
     def dragEnterEvent(self, e):

@@ -58,7 +58,7 @@ class Jobs(QObject):
                 else:
                     ingest.add_file(lib, clip_id, arg, prog)
             except ingest.IngestError as e:
-                lib.update_meta(clip_id, status="error", error=str(e))
+                lib.update_meta(clip_id, status="error", error=str(e), error_detail=getattr(e, "detail", "") or None)
             except Exception:
                 lib.update_meta(clip_id, status="error",
                                 error="เกิดข้อผิดพลาดที่ไม่คาดคิด — กดลองใหม่ ถ้ายังไม่หายให้ลบแล้วเพิ่มใหม่")

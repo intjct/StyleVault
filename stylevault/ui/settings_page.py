@@ -6,7 +6,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QVBoxLayout, QWidget)
+                               QScrollArea, QVBoxLayout, QWidget)
 
 from .. import VERSION, tools
 from ..settings import Settings
@@ -30,7 +30,16 @@ class SettingsPage(QWidget):
         self._bg = _Bg()
         self._bg.done.connect(self._update_done)
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)                      # the page scrolls, so nothing gets squeezed on short windows
+        outer.setContentsMargins(0, 0, 0, 0)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QScrollArea.Shape.NoFrame)
+        body = QWidget()
+        body.setObjectName("Page")
+        sc.setWidget(body)
+        outer.addWidget(sc)
+        root = QVBoxLayout(body)
         root.setContentsMargins(28, 18, 28, 20)
         root.setSpacing(16)
         b = QPushButton("←  กลับไปคลังสไตล์")
@@ -90,13 +99,15 @@ class SettingsPage(QWidget):
         self.browser = QComboBox()
         self.browser.addItem("Chrome", "chrome")
         self.browser.addItem("Edge", "edge")
+        self.browser.addItem("Firefox", "firefox")
         self.browser.currentIndexChanged.connect(self._browser_changed)
         brow.addWidget(bl)
         brow.addWidget(self.browser)
         brow.addStretch(1)
         root.addLayout(brow)
         self.login_warn = QLabel("โปรแกรมจะอ่านการล็อกอินจากเบราว์เซอร์ในเครื่องนี้เท่านั้น "
-                                 "เพื่อโหลดคลิปที่ต้องล็อกอินก่อนดู ไม่ส่งข้อมูลไปที่ไหน และไม่แก้ไขอะไรในเบราว์เซอร์")
+                                 "เพื่อโหลดคลิปที่ต้องล็อกอินก่อนดู ไม่ส่งข้อมูลไปที่ไหน และไม่แก้ไขอะไรในเบราว์เซอร์\n"
+                                 "ถ้าอ่านจาก Chrome/Edge ไม่ได้ ให้ปิดเบราว์เซอร์ให้หมดก่อน หรือเลือก Firefox ซึ่งอ่านได้เสถียรกว่า")
         self.login_warn.setObjectName("Warn")
         self.login_warn.setWordWrap(True)
         root.addWidget(self.login_warn)
@@ -137,7 +148,7 @@ class SettingsPage(QWidget):
         self.login_cb.setChecked(self.s.use_browser_login)
         self.login_cb.blockSignals(False)
         self.browser.blockSignals(True)
-        self.browser.setCurrentIndex(1 if self.s.browser == "edge" else 0)
+        self.browser.setCurrentIndex({"chrome": 0, "edge": 1, "firefox": 2}.get(self.s.browser, 0))
         self.browser.blockSignals(False)
         self._login_toggled(self.s.use_browser_login, save=False)
 

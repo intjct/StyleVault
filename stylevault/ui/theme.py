@@ -76,7 +76,7 @@ QLineEdit, QPlainTextEdit, QComboBox {{
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 1px solid {ACCENT.name()}; background: {BG.name()}; }}
 QPushButton {{
     background: {SURFACE.name()}; border: 1px solid {LINE.name()}; border-radius: 10px; padding: 9px 16px;
-    font-weight: 500;
+    font-weight: 500; min-height: 22px;
 }}
 QPushButton:hover {{ background: #ECEEF2; }}
 QPushButton:disabled {{ color: {TEXT_SOFT.name()}; }}

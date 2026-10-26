@@ -14,11 +14,25 @@ from .library import Library
 
 
 class IngestError(Exception):
-    """message is already easy Thai, safe to show on the card."""
+    """message is already easy Thai, safe to show on the card. detail = raw text from the downloader (for tech support)."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = (detail or "").strip()[-600:]
+
+
+def cookie_problem(text: str) -> bool:
+    """The browser's saved login could not be read (Chrome/Edge lock or encrypt it)."""
+    t = text.lower()
+    return any(k in t for k in ("could not copy", "cookie database", "failed to decrypt", "dpapi", "could not find",
+                                "cookies-from-browser", "permission denied", "unable to read"))
 
 
 def friendly_error(text: str) -> str:
     t = text.lower()
+    if cookie_problem(t) and "cookie" in t:
+        return ("อ่านการล็อกอินจากเบราว์เซอร์ไม่ได้ (เบราว์เซอร์ล็อกไฟล์ไว้) — ปิดเบราว์เซอร์ให้หมดทุกหน้าต่างแล้วกดลองใหม่ "
+                "หรือลองเปลี่ยนเป็น Firefox ในหน้าตั้งค่า")
     if any(k in t for k in ("login", "log in", "sign in", "cookies", "private", "authentication",
                             "rate-limit reached or login required", "age-restricted", "confirm your age")):
         return "คลิปนี้ต้องล็อกอินก่อน — เปิดตัวเลือก \"ใช้การล็อกอินจากเบราว์เซอร์\" ในหน้าตั้งค่า แล้วกดลองใหม่"
@@ -37,7 +51,8 @@ def friendly_error(text: str) -> str:
 
 def _cookie_args(settings) -> list[str]:
     if getattr(settings, "use_browser_login", False):
-        return ["--cookies-from-browser", "edge" if settings.browser == "edge" else "chrome"]
+        b = settings.browser if settings.browser in ("chrome", "edge", "firefox") else "chrome"
+        return ["--cookies-from-browser", b]
     return []
 
 
@@ -45,13 +60,26 @@ def fetch_info(url: str, settings) -> dict:
     cmd = tools.find_ytdlp()
     if not cmd:
         raise IngestError("ไม่พบตัวโหลดคลิปในโปรแกรม — ลองติดตั้งโปรแกรมทับใหม่")
-    r = tools.run(cmd + ["-J", "--no-playlist", "--no-warnings"] + _cookie_args(settings) + [url], timeout=120)
+    base = cmd + ["-J", "--no-playlist", "--no-warnings"]
+    cookies = _cookie_args(settings)
+    guest = False
+    r = tools.run(base + cookies + [url], timeout=120)
+    if r.returncode != 0 and cookies and cookie_problem(r.stderr or r.stdout):
+        r2 = tools.run(base + [url], timeout=120)              # login could not be read: try as a guest first
+        if r2.returncode == 0:
+            r = r2
+            guest = True
+        else:
+            raise IngestError(friendly_error(r.stderr or r.stdout), (r.stderr or r.stdout) + "\n---\n" + (r2.stderr or r2.stdout))
     if r.returncode != 0:
-        raise IngestError(friendly_error(r.stderr or r.stdout))
+        raise IngestError(friendly_error(r.stderr or r.stdout), r.stderr or r.stdout)
     try:
-        return json.loads(r.stdout)
+        info = json.loads(r.stdout)
+        if guest:
+            info["_guest"] = True
+        return info
     except Exception:
-        raise IngestError(friendly_error(r.stderr))
+        raise IngestError(friendly_error(r.stderr), r.stderr)
 
 
 def download(lib: Library, clip_id: str, url: str, settings, progress) -> None:
@@ -87,7 +115,10 @@ def download(lib: Library, clip_id: str, url: str, settings, progress) -> None:
     ff = tools.find_ffmpeg()
     if ff:
         cmd += ["--ffmpeg-location", ff]
-    cmd += _cookie_args(settings) + [url]
+    cookies = _cookie_args(settings)
+    if cookies and info.get("_guest"):
+        cookies = []
+    cmd += cookies + [url]
     progress(0.05, "กำลังโหลดคลิป…")
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace", creationflags=tools.NO_WINDOW)
@@ -100,7 +131,7 @@ def download(lib: Library, clip_id: str, url: str, settings, progress) -> None:
     p.wait()
     video = _find_video(out_dir)
     if p.returncode != 0 or not video:
-        raise IngestError(friendly_error("\n".join(tail)))
+        raise IngestError(friendly_error("\n".join(tail)), "\n".join(tail))
     finish(lib, clip_id, video, progress)
 
 

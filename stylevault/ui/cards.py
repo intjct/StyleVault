@@ -105,6 +105,7 @@ class Card(QWidget):
         # badges
         self._badge_platform(p)
         self._badge_views(p, ih)
+        self._paint_menu_button(p)
         # info
         pad = 10
         p.setPen(theme.CARD_LINE if not self._hover else QColor("#C5CBD4"))
@@ -191,6 +192,20 @@ class Card(QWidget):
                 break
             x += self._pill(p, x, y, t, bg, fg, size=11, weight=theme.NORMAL) + 6
 
+    def _menu_rect(self) -> QRectF:
+        return QRectF(self.width() - 40, 8, 32, 32)
+
+    def _paint_menu_button(self, p):
+        """A small round "⋯" button on the picture (shown when the mouse is over the card): delete, retry, open folder."""
+        r = self._menu_rect()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 235))
+        p.drawEllipse(r)
+        p.setBrush(QColor("#1A1D23"))
+        cx, cy = r.center().x(), r.center().y()
+        for dx in (-7, 0, 7):
+            p.drawEllipse(QRectF(cx + dx - 2, cy - 2, 4, 4))
+
     # ---- mouse
     def enterEvent(self, e):
         self._hover = True
@@ -202,7 +217,10 @@ class Card(QWidget):
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
-            self.clicked.emit(self.clip_id)
+            if self._menu_rect().contains(e.position()):
+                self.menu.emit(self.clip_id, e.globalPosition().toPoint())
+            else:
+                self.clicked.emit(self.clip_id)
 
     def contextMenuEvent(self, e):
         self.menu.emit(self.clip_id, e.globalPos())

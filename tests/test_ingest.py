@@ -57,3 +57,19 @@ def test_error_messages_have_no_technical_words():
     for raw in ("Unsupported URL: x", "HTTP Error 429", "getaddrinfo failed", "Video unavailable", "weird"):
         msg = ingest.friendly_error(raw)
         assert msg and not any(w in msg for w in ("yt-dlp", "HTTP", "Traceback", "ffmpeg"))
+
+
+def test_unreadable_browser_login_falls_back_to_guest(tmp_path, monkeypatch):
+    monkeypatch.setenv("STYLEVAULT_YTDLP", f"{sys.executable}|{os.path.join(HERE, 'fake_ytdlp.py')}")
+    st = Settings(library_dir=str(tmp_path / "lib"), use_browser_login=True, browser="chrome")
+    lib = L.Library(str(tmp_path / "lib"))
+    cid = lib.create_clip("facebook", "9", "effects", "https://www.facebook.com/reel/COOKIEBAD")
+    ingest.download(lib, cid, "https://www.facebook.com/reel/COOKIEBAD", st, lambda f, t: None)
+    assert lib.meta(cid)["status"] == "waiting" and lib.video_path(cid)
+
+
+def test_cookie_problem_message_and_detail():
+    msg = ingest.friendly_error("ERROR: Could not copy Chrome cookie database.")
+    assert "ปิดเบราว์เซอร์" in msg and "cookie" not in msg.lower()
+    e = ingest.IngestError("x", "abc" * 500)
+    assert len(e.detail) <= 600

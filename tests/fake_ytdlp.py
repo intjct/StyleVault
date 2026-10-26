@@ -6,6 +6,9 @@ import sys
 
 args = sys.argv[1:]
 url = args[-1]
+if "--cookies-from-browser" in args and "COOKIEBAD" in url:
+    sys.stderr.write("ERROR: Could not copy Chrome cookie database. See  https://github.com/yt-dlp/yt-dlp/issues/7271\n")
+    sys.exit(1)
 if "FAIL" in url:
     sys.stderr.write("ERROR: [tiktok] 1: This video is private. Log in to view\n")
     sys.exit(1)

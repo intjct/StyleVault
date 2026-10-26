@@ -276,3 +276,40 @@ def test_timeline_clicks(app, tmp_path):
     assert jumps[-1] == 0.0
     tl.grab()                                                                # paints without error
     Timeline().grab()                                                        # empty timeline too
+
+
+# ---------------------------------------------------------------- v0.4.1: visible delete/retry, scrolling settings
+def test_delete_and_retry_buttons_on_detail_page(app, tmp_path, monkeypatch):
+    w = make_window(tmp_path)
+    cid = w.lib.create_clip("facebook", "z", "effects", "https://x", status="error")
+    w.lib.update_meta(cid, error="ลองใหม่นะ", error_detail="line1\nERROR: boom")
+    w.open_clip(cid)
+    assert not w.detail.retry_btn.isHidden() and not w.detail.delete_btn.isHidden()
+    assert "boom" in w.detail.status_box.text()
+    monkeypatch.setattr(dialogs, "message", lambda *a, **k: True)
+    monkeypatch.setattr(w.jobs, "add_link", lambda *a, **k: None)
+    w.detail.retry_btn.click()
+    assert w.lib.meta(cid)["status"] == "downloading"
+    w.lib.update_meta(cid, status="error")
+    w.detail.delete_btn.click()
+    assert w.lib.meta(cid) is None and w.stack.currentWidget() is w.library_page
+
+
+def test_card_menu_button_opens_menu_and_settings_scrolls(app, tmp_path):
+    from PySide6.QtCore import QPointF, Qt, QEvent
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QScrollArea
+    w = make_window(tmp_path)
+    cid = w.lib.create_clip("tiktok", "q", "effects", "https://x", status="waiting")
+    c = Card(cid)                                     # standalone card: the real menu would block the test
+    c.set_data(w.lib.meta(cid), None, None)
+    c.resize(220, 400)
+    got = []
+    c.menu.connect(lambda i, pos: got.append(i))
+    pt = c._menu_rect().center()
+    e = QMouseEvent(QEvent.Type.MouseButtonRelease, pt, c.mapToGlobal(pt), Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+    c.mouseReleaseEvent(e)
+    assert got == [cid]
+    assert w.settings_page.findChild(QScrollArea) is not None
+    c.grab()

@@ -25,6 +25,8 @@ def _fmt_time(sec: float) -> str:
 
 class DetailPage(QWidget):
     back = Signal()
+    delete_requested = Signal(str)
+    retry_requested = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -151,7 +153,14 @@ class DetailPage(QWidget):
         self.open_dir_btn.clicked.connect(self._open_folder)
         btns.addWidget(self.open_url_btn)
         btns.addWidget(self.open_dir_btn)
+        self.retry_btn = QPushButton("ลองโหลดใหม่")
+        self.retry_btn.clicked.connect(lambda: self.retry_requested.emit(self.clip_id))
+        btns.addWidget(self.retry_btn)
         btns.addStretch(1)
+        self.delete_btn = QPushButton("ลบคลิปนี้ออกจากคลัง")
+        self.delete_btn.setStyleSheet("QPushButton { color: #C5221F; } QPushButton:hover { background: #FDECEA; }")
+        self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self.clip_id))
+        btns.addWidget(self.delete_btn)
         self.right.addLayout(btns)
 
     # ---- player (Qt Multimedia; fails soft if the system has no video support)
@@ -271,9 +280,12 @@ class DetailPage(QWidget):
         self.badges.setText("   ·   ".join(b for b in bits if b))
 
         st = m.get("status")
+        self.retry_btn.setVisible(st == "error")
         if st == "error":
             self.status_box.setObjectName("Warn")
-            self.status_box.setText(m.get("error") or "โหลดคลิปไม่สำเร็จ")
+            det = (m.get("error_detail") or "").strip().splitlines()
+            det = det[-1][:220] if det else ""
+            self.status_box.setText((m.get("error") or "โหลดคลิปไม่สำเร็จ") + (f"\n\nรายละเอียด (ส่งให้ผมดูได้): {det}" if det else ""))
             self.copy_btn.hide()
         elif st in ("downloading", "preparing"):
             self.status_box.setObjectName("Hint")
