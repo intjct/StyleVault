@@ -162,3 +162,18 @@ def test_old_clips_without_raw_data_get_prepared_on_start(app, tmp_path):
     assert wait_until(app, lambda: (w.lib.meta(cid) or {}).get("raw_ready") is True)
     assert w.lib.meta(cid)["status"] == "waiting"
     assert w.lib.meta(dead)["status"] == "error" and "ลองใหม่" in w.lib.meta(dead)["error"]
+
+
+def test_copy_command_works_in_a_brand_new_chat(app, tmp_path):
+    w = make_window(tmp_path)
+    seed(w.lib, 1)
+    cid = w.lib.list_ids()[0]
+    w.lib.update_meta(cid, raw_ready=True)
+    w.library_page.refresh()
+    assert not w.library_page.copy_cmd.isHidden()
+    w.library_page._copy_command()
+    text = QApplication.clipboard().text()
+    assert w.lib.root in text and "CLAUDE-README.md" in text and "วิเคราะห์คลิปใหม่" in text
+    w.open_clip(cid)
+    w.detail._copy_command()
+    assert w.lib.root in QApplication.clipboard().text()

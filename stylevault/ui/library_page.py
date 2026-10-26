@@ -66,6 +66,11 @@ class LibraryPage(QWidget):
             chips.addWidget(b)
         self.chip["all"][0].setChecked(True)
         chips.addStretch(1)
+        self.copy_cmd = QPushButton("คัดลอกคำสั่งให้ Claude วิเคราะห์")
+        self.copy_cmd.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_cmd.clicked.connect(self._copy_command)
+        self.copy_cmd.hide()
+        chips.addWidget(self.copy_cmd)
         self.search = QLineEdit()
         self.search.setPlaceholderText("ค้นหาชื่อหรือแท็ก")
         self.search.setFixedWidth(220)
@@ -107,6 +112,15 @@ class LibraryPage(QWidget):
     def clear_url(self):
         self.url.clear()
 
+    def _copy_command(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtGui import QGuiApplication
+        from ..claude_readme import analyze_command
+        if self.lib:
+            QGuiApplication.clipboard().setText(analyze_command(self.lib.root))
+            self.copy_cmd.setText("คัดลอกแล้ว ✓ ไปวางในแชต Claude ได้เลย")
+            QTimer.singleShot(2500, lambda: self.copy_cmd.setText("คัดลอกคำสั่งให้ Claude วิเคราะห์"))
+
     def _set_filter(self, key: str):
         self.filter_key = key
         self.refresh()
@@ -136,6 +150,7 @@ class LibraryPage(QWidget):
             n = {"all": len(metas), "effects": sum(1 for m in metas if m.get("kind") == "effects"),
                  "viral": sum(1 for m in metas if m.get("kind") == "viral"), "waiting": waiting}[key]
             b.setText(f"{name} {n}")
+        self.copy_cmd.setVisible(any(m.get("status") == "waiting" and m.get("raw_ready") for m in metas))
         shown = []
         alive = set()
         for m in metas:

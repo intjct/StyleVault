@@ -2,4 +2,4 @@
 
 APP_NAME = "StyleVault"
 APP_TITLE_TH = "คลังสไตล์"
-VERSION = "0.3.0"
+VERSION = "0.3.1"

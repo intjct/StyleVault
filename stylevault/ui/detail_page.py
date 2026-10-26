@@ -106,8 +106,8 @@ class DetailPage(QWidget):
         self.status_box.setWordWrap(True)
         self.status_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.right.addWidget(self.status_box)
-        self.copy_btn = QPushButton("คัดลอกข้อความ \"วิเคราะห์คลิปใหม่\"")
-        self.copy_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText("วิเคราะห์คลิปใหม่"))
+        self.copy_btn = QPushButton("คัดลอกคำสั่งให้ Claude")
+        self.copy_btn.clicked.connect(self._copy_command)
         self.right.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         h = QLabel("ข้อมูลคลิป")
@@ -255,7 +255,7 @@ class DetailPage(QWidget):
             self.copy_btn.hide()
         else:
             self.status_box.setObjectName("Hint")
-            self.status_box.setText("คลิปนี้พร้อมให้ Claude วิเคราะห์แล้ว\nพิมพ์ในแชต Claude ว่า \"วิเคราะห์คลิปใหม่\"")
+            self.status_box.setText("คลิปนี้พร้อมให้ Claude วิเคราะห์แล้ว\nกดปุ่มด้านล่างเพื่อคัดลอกคำสั่ง แล้ววางในแชต Claude (แชตใหม่ก็ได้)")
             self.copy_btn.show()
         self.status_box.style().unpolish(self.status_box)
         self.status_box.style().polish(self.status_box)
@@ -296,6 +296,13 @@ class DetailPage(QWidget):
             b.setWordWrap(True)
             self.info_grid.addWidget(a, i, 0)
             self.info_grid.addWidget(b, i, 1)
+
+    def _copy_command(self):
+        from ..claude_readme import analyze_command
+        if self.lib:
+            QGuiApplication.clipboard().setText(analyze_command(self.lib.root))
+            self.copy_btn.setText("คัดลอกแล้ว ✓ ไปวางในแชต Claude ได้เลย")
+            QTimer.singleShot(2500, lambda: self.copy_btn.setText("คัดลอกคำสั่งให้ Claude"))
 
     def _open_source(self):
         m = (self.lib.meta(self.clip_id) if self.lib and self.clip_id else None) or {}

@@ -67,3 +67,10 @@ meta.json: `kind` = effects (สไตล์เอฟเฟกต์) หรื�
 3. อ่าน `style-card.json` ของสไตล์ที่เลือก ใช้ `remotion_recipe` + `audio.sfx_th` ตัดต่อ
 4. หลังส่งงาน ถ้าแตมคอมเมนต์ ให้ต่อท้าย `notes.md` ของสไตล์นั้นว่า "ใช้กับงาน X — แตมชอบ/ไม่ชอบ ..."
 """
+
+
+def analyze_command(library_path: str) -> str:
+    """The text the program copies for the user: works in ANY new chat, even one that has never heard of StyleVault."""
+    return ("วิเคราะห์คลิปใหม่ในคลังสไตล์ (StyleVault)\n"
+            f"โฟลเดอร์คลัง: {library_path}\n"
+            "ขอสิทธิ์เข้าโฟลเดอร์นี้ถ้ายังไม่ได้เชื่อม แล้วอ่านไฟล์ CLAUDE-README.md ในโฟลเดอร์นั้นก่อน จากนั้นทำตามขั้นตอนในไฟล์")
