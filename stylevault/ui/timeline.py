@@ -1,4 +1,4 @@
-"""One bar for the whole clip: blue lines = cuts, orange dots = sound effects, click to jump or listen."""
+"""One bar for the whole clip: blue lines = cuts, orange dots = sound effects, grey dots = speech/music moments."""
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -46,7 +46,7 @@ class Timeline(QWidget):
     def _dot_at(self, pt) -> dict | None:
         best, dist = None, 99.0
         for s in self.sfx:
-            dx = abs(self._x(s["t"]) - pt.x())
+            dx = abs(self._x(s["t"]) - pt.x()) + (2 if s.get("background") else 0)   # effects win when dots overlap
             if dx <= 8 and abs(pt.y() - BAR_Y) <= 12 and dx < dist:
                 best, dist = s, dx
         return best
@@ -76,11 +76,17 @@ class Timeline(QWidget):
         for c in self.cuts:
             x = self._x(c)
             p.drawLine(QPointF(x, BAR_Y - 18), QPointF(x, BAR_Y + 14))
-        # sound effects (orange dots)
+        # speech / music moments (small grey dots) first, then real sound effects (orange) on top
+        p.setPen(QPen(QColor("white"), 1.2))
+        p.setBrush(QColor("#AEB4BE"))
+        for s in self.sfx:
+            if s.get("background"):
+                p.drawEllipse(QPointF(self._x(s["t"]), BAR_Y), 3.6, 3.6)
         p.setPen(QPen(QColor("white"), 1.5))
         p.setBrush(theme.SFX)
         for s in self.sfx:
-            p.drawEllipse(QPointF(self._x(s["t"]), BAR_Y), 5.5, 5.5)
+            if not s.get("background"):
+                p.drawEllipse(QPointF(self._x(s["t"]), BAR_Y), 5.5, 5.5)
         # playhead
         x = self._x(min(self.pos, self.duration))
         p.setPen(QPen(theme.TEXT, 1.6))

@@ -12,10 +12,13 @@ import urllib.request
 
 from . import tools
 
-MODEL_NAME = "ggml-small.bin"
-MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
-MODEL_MIN_BYTES = 400_000_000          # the real file is ~488 MB; anything smaller is a broken download
-MODEL_SIZE_TH = "ประมาณ 470 MB"
+# large-v3-turbo (compressed): much better Thai than "small", about the same download size
+MODEL_NAME = "ggml-large-v3-turbo-q5_0.bin"
+MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+MODEL_MIN_BYTES = 500_000_000          # the real file is ~574 MB; anything smaller is a broken download
+MODEL_SIZE_TH = "ประมาณ 570 MB"
+MODEL_LABEL = "whisper large-v3-turbo"
+OLD_MODELS = ("ggml-small.bin",)       # earlier, less accurate model (v0.5.0) — removed after the upgrade
 
 
 class TranscribeError(Exception):
@@ -29,6 +32,15 @@ def models_dir() -> str:
 
 def model_path() -> str:
     return os.environ.get("STYLEVAULT_WHISPER_MODEL") or os.path.join(models_dir(), MODEL_NAME)
+
+
+def old_model_present() -> bool:
+    return any(os.path.isfile(os.path.join(models_dir(), n)) for n in OLD_MODELS)
+
+
+def needs_redo(transcript: dict | None) -> bool:
+    """A transcript made by the older, weaker model is redone once the better model is installed."""
+    return not isinstance(transcript, dict) or transcript.get("model") != MODEL_LABEL
 
 
 def model_ready() -> bool:
@@ -64,7 +76,7 @@ def download_model(progress, should_stop=lambda: False) -> None:
     try:
         req = urllib.request.Request(MODEL_URL, headers={"User-Agent": "StyleVault"})
         with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
-            total = int(r.headers.get("Content-Length") or 0) or 488_000_000
+            total = int(r.headers.get("Content-Length") or 0) or 574_000_000
             got = 0
             while True:
                 if should_stop():
@@ -85,6 +97,8 @@ def download_model(progress, should_stop=lambda: False) -> None:
         _rm(part)
         raise TranscribeError("ไฟล์ที่ได้ไม่ครบ — กดดาวน์โหลดใหม่อีกครั้ง")
     os.replace(part, final)
+    for n in OLD_MODELS:                                   # free the disk space of the old model
+        _rm(os.path.join(models_dir(), n))
     progress(1.0, "ดาวน์โหลดเสร็จแล้ว")
 
 
@@ -113,7 +127,7 @@ def parse(raw: dict) -> dict:
             continue
         segs.append({"from": round(a, 2), "to": round(b, 2), "text": text})
     lang = (raw.get("result") or {}).get("language")
-    return {"language": lang, "model": "whisper small", "segments": segs,
+    return {"language": lang, "model": MODEL_LABEL, "segments": segs,
             "text": " ".join(s["text"] for s in segs), "has_speech": bool(segs)}
 
 

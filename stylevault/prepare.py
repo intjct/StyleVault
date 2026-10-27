@@ -271,7 +271,7 @@ def needs_extras(lib: Library, clip_id: str) -> bool:
         return False
     if sfxlabel.available() and audio.get("sfx") and not audio.get("labels_version"):
         return True
-    return transcribe.ready() and not os.path.isfile(os.path.join(raw, "transcript.json"))
+    return transcribe.ready() and transcribe.needs_redo(_read(os.path.join(raw, "transcript.json")))
 
 
 def extras(lib: Library, clip_id: str, progress=lambda f, t: None) -> None:
@@ -292,7 +292,7 @@ def extras(lib: Library, clip_id: str, progress=lambda f, t: None) -> None:
             pass
     video = lib.video_path(clip_id)
     tpath = os.path.join(raw, "transcript.json")
-    if video and transcribe.ready() and not os.path.isfile(tpath):
+    if video and transcribe.ready() and transcribe.needs_redo(_read(tpath)):
         progress(0.3, "กำลังถอดคำพูด…")
         try:
             data = transcribe.transcribe(video, tpath, lambda f, t: progress(0.3 + 0.7 * f, t))

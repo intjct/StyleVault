@@ -26,6 +26,7 @@ class Settings:
     use_browser_login: bool = False      # read the browser's login for Instagram/Facebook
     browser: str = "chrome"              # chrome / edge
     first_run_done: bool = False
+    volume: int = 50                     # clip player volume 0-100 (remembered)
 
     def library_path(self) -> str:
         return self.library_dir or default_library_dir()

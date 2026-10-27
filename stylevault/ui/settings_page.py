@@ -103,6 +103,7 @@ class SettingsPage(QWidget):
         sp.setWordWrap(True)
         root.addWidget(sp)
         self.speech_lbl = QLabel()
+        self.speech_lbl.setWordWrap(True)
         root.addWidget(self.speech_lbl)
         srow = QHBoxLayout()
         self.speech_btn = QPushButton("ดาวน์โหลดตัวถอดคำพูด")
@@ -196,8 +197,14 @@ class SettingsPage(QWidget):
         elif transcribe.model_ready():
             self.speech_lbl.setText("พร้อมใช้งาน — คลิปใหม่จะถูกถอดคำพูดให้เอง")
             self.speech_btn.hide()
+        elif transcribe.old_model_present():
+            self.speech_lbl.setText("มีตัวถอดคำพูดรุ่นใหม่ที่แม่นกว่าเดิมมาก (โดยเฉพาะภาษาไทย) — กดดาวน์โหลดเพื่อเปลี่ยน "
+                                    "คลิปเดิมจะถูกถอดใหม่ให้เอง")
+            self.speech_btn.setText("ดาวน์โหลดตัวถอดรุ่นใหม่")
+            self.speech_btn.show()
         else:
             self.speech_lbl.setText("ยังไม่ได้ดาวน์โหลด")
+            self.speech_btn.setText("ดาวน์โหลดตัวถอดคำพูด")
             self.speech_btn.show()
 
     def _speech_download(self):

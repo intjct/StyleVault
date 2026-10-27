@@ -58,6 +58,8 @@ class MainWindow(QWidget):
         self.detail.retry_requested.connect(self.retry_clip)
         self.detail.tag_clicked.connect(self.show_tag)
         self.detail.compare_requested.connect(self.start_compare)
+        self.detail.set_volume(self.s.volume)
+        self.detail.volume_changed.connect(self._save_volume)
         self.compare.back.connect(self.show_library)
         self.compare.open_clip.connect(self.open_clip)
         self.settings_page.back.connect(self.show_library)
@@ -75,6 +77,7 @@ class MainWindow(QWidget):
         self.lib.rebuild_index()
         self._recover()
         self._seen = self._signature()
+        self._vol_timer = QTimer(self, singleShot=True, interval=500, timeout=self.s.save)
         self._watch = QTimer(self, interval=1000, timeout=self._poll)      # Claude writes files: pick them up within ~1 s
         self._watch.start()
         if not os.environ.get("STYLEVAULT_NO_UPDATE_CHECK"):
@@ -162,6 +165,10 @@ class MainWindow(QWidget):
                 return
         self.detail.show_clip(self.lib, clip_id)
         self.stack.setCurrentWidget(self.detail)
+
+    def _save_volume(self, v: int):
+        self.s.volume = int(v)
+        self._vol_timer.start()                              # save once the slider stops moving
 
     def show_tag(self, tag: str):
         self.show_library()

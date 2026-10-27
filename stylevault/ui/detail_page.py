@@ -12,6 +12,7 @@ from .. import library as L
 from .. import stylecard as SC
 from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views
 from . import theme
+from ..sfxlabel import BACKGROUND
 from .timeline import Timeline
 
 VIDEO_W = 288
@@ -29,6 +30,7 @@ class DetailPage(QWidget):
     retry_requested = Signal(str)
     tag_clicked = Signal(str)
     compare_requested = Signal(str)
+    volume_changed = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -48,22 +50,23 @@ class DetailPage(QWidget):
         b.clicked.connect(self.back)
         root.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
 
-        body = QHBoxLayout()
+        body = QHBoxLayout()                           # left (video) stays put, right side scrolls on its own
         body.setSpacing(28)
-        body.setContentsMargins(0, 0, 0, 24)
-        body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        page_scroll = QScrollArea()                    # the whole page scrolls on short windows
-        page_scroll.setWidgetResizable(True)
-        page_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        body_holder = QWidget()
-        body_holder.setLayout(body)
-        page_scroll.setWidget(body_holder)
-        root.addWidget(page_scroll, 1)
+        body.setContentsMargins(0, 0, 0, 0)
+        root.addLayout(body, 1)
 
-        # ---- left column
-        left = QVBoxLayout()
+        # ---- left column (its own scroll only when the window is very short)
+        left_holder = QWidget()
+        left = QVBoxLayout(left_holder)
+        left.setContentsMargins(0, 0, 0, 16)
         left.setSpacing(10)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setFixedWidth(VIDEO_W + 14)
+        left_scroll.setWidget(left_holder)
+        self.left_scroll = left_scroll
         self.video_box = QFrame()
         self.video_box.setFixedSize(VIDEO_W, VIDEO_H)
         self.video_box.setStyleSheet("background:#0E1014; border-radius:10px;")
@@ -84,6 +87,23 @@ class DetailPage(QWidget):
         self.time_lbl.setMinimumWidth(70)
         ctl.addWidget(self.time_lbl)
         left.addLayout(ctl)
+        vol = QHBoxLayout()                            # volume: starts at a gentle level, remembered
+        self.mute_btn = QPushButton("ปิดเสียง")
+        self.mute_btn.setFixedWidth(84)
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.toggled.connect(self._mute_toggled)
+        vol.addWidget(self.mute_btn)
+        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vol_slider.setRange(0, 100)
+        self.vol_slider.setValue(50)
+        self.vol_slider.setToolTip("ความดังเสียง")
+        self.vol_slider.valueChanged.connect(self._volume_moved)
+        vol.addWidget(self.vol_slider, 1)
+        self.vol_lbl = QLabel("เสียง 50%")
+        self.vol_lbl.setObjectName("Soft")
+        self.vol_lbl.setMinimumWidth(70)
+        vol.addWidget(self.vol_lbl)
+        left.addLayout(vol)
         nl = QLabel("โน้ตของแตม")
         nl.setObjectName("H2")
         left.addWidget(nl)
@@ -92,13 +112,21 @@ class DetailPage(QWidget):
         self.notes.setFixedHeight(96)
         self.notes.textChanged.connect(self._on_notes)
         left.addWidget(self.notes)
-        body.addLayout(left)
+        left.addStretch(1)
+        body.addWidget(left_scroll)
 
         # ---- right column (scrolls)
-        self.right = QVBoxLayout()
+        right_holder = QWidget()
+        self.right = QVBoxLayout(right_holder)
+        self.right.setContentsMargins(0, 0, 8, 24)
         self.right.setSpacing(16)
         self.right.setAlignment(Qt.AlignmentFlag.AlignTop)
-        body.addLayout(self.right, 1)
+        self.right_scroll = QScrollArea()
+        self.right_scroll.setWidgetResizable(True)
+        self.right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.right_scroll.setWidget(right_holder)
+        body.addWidget(self.right_scroll, 1)
 
         self.badges = QLabel()
         self.badges.setObjectName("Soft")
@@ -127,7 +155,8 @@ class DetailPage(QWidget):
         self.timeline.seek.connect(self._seek_to)
         self.timeline.play_sfx.connect(self._play_sfx)
         self.right.addWidget(self.timeline)
-        self.timeline_legend = QLabel("เส้นน้ำเงิน = จุดตัดภาพ   ·   จุดส้ม = เสียงเอฟเฟกต์ (คลิกเพื่อฟัง)   ·   คลิกที่ว่างเพื่อกระโดดไปตรงนั้น")
+        self.timeline_legend = QLabel("เส้นน้ำเงิน = จุดตัดภาพ   ·   จุดส้ม = เสียงเอฟเฟกต์   ·   จุดเทา = เสียงพูด / เพลง   ·   "
+                                      "คลิกจุดเพื่อฟัง คลิกที่ว่างเพื่อกระโดดไปตรงนั้น")
         self.timeline_legend.setObjectName("Soft")
         self.timeline_legend.setWordWrap(True)
         self.right.addWidget(self.timeline_legend)
@@ -184,6 +213,7 @@ class DetailPage(QWidget):
             self.player = QMediaPlayer(self)
             if QMediaDevices.audioOutputs():          # a PC with no speakers must not crash the page
                 self.audio = QAudioOutput(self)
+                self.audio.setVolume(self._gain())
                 self.player.setAudioOutput(self.audio)
             self.player.setVideoOutput(self.video)
             self.player.positionChanged.connect(self._on_pos)
@@ -197,6 +227,47 @@ class DetailPage(QWidget):
             self.fallback.setStyleSheet("color:white; background:transparent;")
             self.fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self.fallback)
+
+    def resizeEvent(self, e):
+        """The video shrinks a little on short windows so play / volume / notes always fit without scrolling."""
+        super().resizeEvent(e)
+        free = self.left_scroll.height() - 270                 # room left after the controls and notes
+        h = max(360, min(VIDEO_H, free))
+        w = int(h * VIDEO_W / VIDEO_H)
+        if self.video_box.height() != h:
+            self.video_box.setFixedSize(w, h)
+
+    # ---- volume (slider is 0-100; ears hear it roughly squared, so 50% is pleasantly quiet)
+    def _gain(self) -> float:
+        if getattr(self, "mute_btn", None) is not None and self.mute_btn.isChecked():
+            return 0.0
+        v = self.vol_slider.value() if getattr(self, "vol_slider", None) is not None else 50
+        return (v / 100) ** 2
+
+    def _apply_volume(self):
+        g = self._gain()
+        if getattr(self, "audio", None) is not None:
+            self.audio.setVolume(g)
+        if getattr(self, "_sfx_player", None) is not None:
+            self._sfx_player.setVolume(g)
+
+    def set_volume(self, value: int):
+        self.vol_slider.blockSignals(True)
+        self.vol_slider.setValue(max(0, min(100, int(value))))
+        self.vol_slider.blockSignals(False)
+        self.vol_lbl.setText(f"เสียง {self.vol_slider.value()}%")
+        self._apply_volume()
+
+    def _volume_moved(self, v: int):
+        self.vol_lbl.setText(f"เสียง {v}%")
+        if v > 0 and self.mute_btn.isChecked():
+            self.mute_btn.setChecked(False)
+        self._apply_volume()
+        self.volume_changed.emit(v)
+
+    def _mute_toggled(self, on: bool):
+        self.mute_btn.setText("เปิดเสียง" if on else "ปิดเสียง")
+        self._apply_volume()
 
     def _on_media_status(self, st):
         from PySide6.QtMultimedia import QMediaPlayer
@@ -471,9 +542,14 @@ class DetailPage(QWidget):
             for s in audio["sfx"]:
                 if not isinstance(s, dict) or not isinstance(s.get("t"), (int, float)):
                     continue
-                near = [x for x in labels if abs(x["t"] - s["t"]) <= 0.15]
-                label = (near[0].get("type_th") if near else None) or s.get("label_th")
-                sfx.append({"t": s["t"], "file": s.get("file") or "", "label": label})
+                near = [x for x in labels if isinstance(x, dict) and isinstance(x.get("t"), (int, float))
+                        and abs(x["t"] - s["t"]) <= 0.15]
+                if near and near[0].get("type_th"):              # Claude listened to it: a real effect
+                    label, bg = near[0]["type_th"], False
+                else:
+                    label = s.get("label_th")
+                    bg = label in BACKGROUND
+                sfx.append({"t": s["t"], "file": s.get("file") or "", "label": label, "background": bg})
         dur = m.get("duration_sec")
         show = bool(dur) and isinstance(cuts, dict)
         for w in (self.timeline_title, self.timeline, self.timeline_legend):
@@ -498,6 +574,7 @@ class DetailPage(QWidget):
                 return
             if getattr(self, "_sfx_player", None) is None:
                 self._sfx_player = QSoundEffect(self)
+            self._sfx_player.setVolume(self._gain())
             self._sfx_player.setSource(QUrl.fromLocalFile(path))
             self._sfx_player.play()
         except Exception:
@@ -616,8 +693,12 @@ class DetailPage(QWidget):
                 for x in audio.get("sfx") or []:
                     if isinstance(x, dict) and x.get("label_th"):
                         kinds[x["label_th"]] = kinds.get(x["label_th"], 0) + 1
+                fx = sorted(((k, n) for k, n in kinds.items() if k not in BACKGROUND), key=lambda kv: -kv[1])
+                bgk = sorted(((k, n) for k, n in kinds.items() if k in BACKGROUND), key=lambda kv: -kv[1])
                 if kinds:
-                    rows.append(("ชนิดเสียงที่ได้ยิน", "  ·  ".join(f"{k} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))))
+                    rows.append(("เสียงเอฟเฟกต์", "  ·  ".join(f"{k} {n}" for k, n in fx) or "ไม่พบเสียงเอฟเฟกต์ชัดๆ"))
+                if bgk:
+                    rows.append(("จุดเสียงอื่น (พูด / เพลง)", "  ·  ".join(f"{k} {n}" for k, n in bgk)))
                 rows.append(("เสียงเงียบ", "ไม่มีช่วงเงียบเลย (มีเพลงหรือเสียงคลอตลอด)" if not audio.get("silences")
                              else f"{len(audio['silences'])} ช่วง"))
         for i, (k, val) in enumerate(rows):

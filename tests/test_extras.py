@@ -132,3 +132,31 @@ def test_real_yamnet_model(tmp_path, monkeypatch):
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=1000:duration=0.6", wav], check=True)
     res = sfxlabel.label_file(wav)
     assert res and res[0] in sfxlabel.class_names() and 0 <= res[2] <= 1
+
+
+def test_upgrade_from_the_old_small_model(tmp_path, fake_tools, monkeypatch):
+    lib, cid = clip_with_sound(tmp_path)
+    prepare.prepare(lib, cid, lambda f, t: None)
+    tpath = os.path.join(lib.clip_dir(cid), "raw", "transcript.json")
+    assert json.load(open(tpath, encoding="utf-8"))["model"] == transcribe.MODEL_LABEL
+    assert not prepare.needs_extras(lib, cid)
+    old = json.load(open(tpath, encoding="utf-8"))
+    old["model"] = "whisper small"                                    # made by v0.5.0
+    json.dump(old, open(tpath, "w", encoding="utf-8"))
+    assert prepare.needs_extras(lib, cid)
+    prepare.extras(lib, cid)
+    assert json.load(open(tpath, encoding="utf-8"))["model"] == transcribe.MODEL_LABEL
+    # downloading the new model deletes the old one
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "ggml-small.bin").write_bytes(b"old")
+    src = tmp_path / "new.bin"
+    src.write_bytes(b"n" * 3_000_000)
+    monkeypatch.setattr(transcribe, "models_dir", lambda: str(models))
+    monkeypatch.delenv("STYLEVAULT_WHISPER_MODEL")
+    monkeypatch.setattr(transcribe, "MODEL_URL", src.as_uri())
+    monkeypatch.setattr(transcribe, "MODEL_MIN_BYTES", 2_000_000)
+    assert transcribe.old_model_present() and not transcribe.model_ready()
+    transcribe.download_model(lambda f, t: None)
+    assert transcribe.model_ready() and not transcribe.old_model_present()
+    assert os.listdir(models) == [transcribe.MODEL_NAME]

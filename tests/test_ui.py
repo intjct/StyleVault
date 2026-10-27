@@ -334,7 +334,7 @@ def test_detail_shows_speech_and_sound_names(app, tmp_path):
     _speech_and_labels(w, cid)
     w.open_clip(cid)
     texts = " ".join(l.text() for l in w.detail.findChildren(QLabel))
-    for need in ("คำพูดในคลิป", "สวัสดีครับ", "ลาก่อน", "ชนิดเสียงที่ได้ยิน", "เสียงวูบ (ฟิ้ว) 1", "เสียงพิมพ์ดีด 1"):
+    for need in ("คำพูดในคลิป", "สวัสดีครับ", "ลาก่อน", "เสียงเอฟเฟกต์", "เสียงวูบ (ฟิ้ว) 1", "เสียงพิมพ์ดีด 1"):
         assert need in texts, need
     assert [s["label"] for s in w.detail.timeline.sfx] == ["เสียงวูบ (ฟิ้ว)", "เสียงพิมพ์ดีด"]
     jumps = [b for b in w.detail.findChildren(QPushButton) if b.text() == "1:05"]
@@ -413,3 +413,76 @@ def test_settings_speech_section(app, tmp_path, monkeypatch):
     sp.speech_btn.click()
     assert wait_until(app, lambda: got, secs=5)
     assert "พร้อมใช้งาน" in sp.speech_lbl.text() and sp.speech_btn.isHidden()
+
+
+# ---------------------------------------------------------------- v0.5.1: player stays put, volume, grey dots
+def test_player_stays_next_to_video_with_long_transcript(app, tmp_path):
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    _speech_and_labels(w, cid)
+    raw = os.path.join(w.lib.clip_dir(cid), "raw")
+    L.write_json(os.path.join(raw, "transcript.json"), {"language": "th", "has_speech": True, "text": "x",
+                 "segments": [{"from": i * 2.0, "to": i * 2.0 + 2, "text": f"ประโยคที่ {i}"} for i in range(60)]})
+    w.resize(1100, 1000)
+    w.show()
+    w.open_clip(cid)
+    for _ in range(5):
+        app.processEvents()
+    gap = w.detail.play_btn.mapTo(w.detail, w.detail.play_btn.rect().topLeft()).y() - \
+        w.detail.video_box.mapTo(w.detail, w.detail.video_box.rect().bottomLeft()).y()
+    assert 0 <= gap < 30, gap                                         # controls sit right under the video
+    assert w.detail.right_scroll.verticalScrollBar().maximum() > 0     # only the right side scrolls
+    assert w.detail.left_scroll.verticalScrollBar().maximum() == 0
+    w.hide()
+
+
+def test_volume_is_remembered_and_mute_works(app, tmp_path):
+    w = make_window(tmp_path)
+    assert w.detail.vol_slider.value() == 50 and abs(w.detail._gain() - 0.25) < 1e-6
+    w.detail.vol_slider.setValue(30)
+    assert w.s.volume == 30 and w.detail.vol_lbl.text() == "เสียง 30%"
+    w.detail.mute_btn.setChecked(True)
+    assert w.detail._gain() == 0.0 and w.detail.mute_btn.text() == "เปิดเสียง"
+    w.detail.vol_slider.setValue(40)                                  # moving the slider un-mutes
+    assert not w.detail.mute_btn.isChecked() and w.detail._gain() > 0
+    w._vol_timer.timeout.emit()
+    from stylevault.settings import Settings as S2
+    assert S2.load().volume == 40
+    w2 = make_window(tmp_path)
+    w2.s.volume = 40
+    w2.detail.set_volume(w2.s.volume)
+    assert w2.detail.vol_slider.value() == 40
+
+
+def test_speech_and_music_dots_are_grey(app, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    raw = os.path.join(w.lib.clip_dir(cid), "raw")
+    a = L.read_json(os.path.join(raw, "audio.json"))
+    a["sfx"][0].update(label_th="เสียงพูด")
+    a["sfx"][1].update(label_th="เสียงป๊อป")
+    L.write_json(os.path.join(raw, "audio.json"), a)
+    w.open_clip(cid)
+    assert [s["background"] for s in w.detail.timeline.sfx] == [True, False]
+    texts = " ".join(l.text() for l in w.detail.findChildren(QLabel))
+    assert "เสียงป๊อป 1" in texts and "เสียงพูด 1" in texts and "จุดเทา" in texts
+    # Claude's card overrides: a sound it named is an effect even if the model said "speech"
+    L.write_json(os.path.join(w.lib.clip_dir(cid), "style-card.json"),
+                 make_card(audio={"sfx_th": [{"t": 0.38, "type_th": "เสียงวูบ", "role_th": "x"}]}))
+    w.lib.update_meta(cid, status="analyzed")
+    w.detail.render()
+    assert w.detail.timeline.sfx[0]["background"] is False and w.detail.timeline.sfx[0]["label"] == "เสียงวูบ"
+    w.detail.timeline.grab()
+
+
+def test_settings_offers_the_better_speech_model(app, tmp_path, monkeypatch):
+    from stylevault import transcribe
+    w = make_window(tmp_path)
+    monkeypatch.setattr(transcribe, "find_cli", lambda: ["whisper-cli"])
+    monkeypatch.setattr(transcribe, "model_ready", lambda: False)
+    monkeypatch.setattr(transcribe, "old_model_present", lambda: True)
+    w.open_settings()
+    sp = w.settings_page
+    assert "รุ่นใหม่" in sp.speech_lbl.text() and sp.speech_btn.text() == "ดาวน์โหลดตัวถอดรุ่นใหม่"
+    assert "570 MB" in " ".join(l.text() for l in sp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
