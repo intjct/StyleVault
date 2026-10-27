@@ -313,3 +313,103 @@ def test_card_menu_button_opens_menu_and_settings_scrolls(app, tmp_path):
     assert got == [cid]
     assert w.settings_page.findChild(QScrollArea) is not None
     c.grab()
+
+
+# ---------------------------------------------------------------- v0.5.0: speech, sound names, tags, compare
+def _speech_and_labels(w, cid):
+    raw = os.path.join(w.lib.clip_dir(cid), "raw")
+    a = L.read_json(os.path.join(raw, "audio.json"))
+    a["sfx"][0].update(label="Whoosh, swoosh, swish", label_th="เสียงวูบ (ฟิ้ว)", confidence=0.6)
+    a["sfx"][1].update(label="Typing", label_th="เสียงพิมพ์ดีด", confidence=0.4)
+    a["labels_version"] = 1
+    L.write_json(os.path.join(raw, "audio.json"), a)
+    L.write_json(os.path.join(raw, "transcript.json"), {"language": "th", "has_speech": True, "text": "สวัสดี ลาก่อน",
+                 "segments": [{"from": 0.0, "to": 1.2, "text": "สวัสดีครับ"}, {"from": 65.0, "to": 66.0, "text": "ลาก่อน"}]})
+
+
+def test_detail_shows_speech_and_sound_names(app, tmp_path):
+    from PySide6.QtWidgets import QLabel, QPushButton
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    _speech_and_labels(w, cid)
+    w.open_clip(cid)
+    texts = " ".join(l.text() for l in w.detail.findChildren(QLabel))
+    for need in ("คำพูดในคลิป", "สวัสดีครับ", "ลาก่อน", "ชนิดเสียงที่ได้ยิน", "เสียงวูบ (ฟิ้ว) 1", "เสียงพิมพ์ดีด 1"):
+        assert need in texts, need
+    assert [s["label"] for s in w.detail.timeline.sfx] == ["เสียงวูบ (ฟิ้ว)", "เสียงพิมพ์ดีด"]
+    jumps = [b for b in w.detail.findChildren(QPushButton) if b.text() == "1:05"]
+    assert jumps
+    seeks = []
+    w.detail._seek_to = seeks.append
+    jumps[0].click()
+    assert seeks == [65.0]
+
+
+def test_speech_note_when_not_installed(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QLabel
+    from stylevault import transcribe
+    monkeypatch.setattr(transcribe, "ready", lambda: False)
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    w.open_clip(cid)
+    assert any("ดาวน์โหลดตัวถอดคำพูด" in l.text() for l in w.detail.findChildren(QLabel))
+
+
+def test_tag_click_filters_library(app, tmp_path):
+    from PySide6.QtWidgets import QPushButton
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    other = w.lib.create_clip("tiktok", "o", "viral", "https://y", status="waiting")
+    L.write_json(os.path.join(w.lib.clip_dir(cid), "style-card.json"), CARD)
+    w.lib.update_meta(cid, status="analyzed")
+    w.open_clip(cid)
+    tag = [b for b in w.detail.findChildren(QPushButton) if b.text() == "ไวรัล"][0]
+    tag.click()
+    assert w.stack.currentWidget() is w.library_page and w.library_page.search.text() == "ไวรัล"
+    shown = {c.clip_id for c in w.library_page.grid.cards}
+    assert shown == {cid} and other not in shown
+
+
+def test_compare_two_clips(app, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    w = make_window(tmp_path)
+    a = analyzed_clip(w, tmp_path, "a")
+    b = analyzed_clip(w, tmp_path, "b")
+    _speech_and_labels(w, a)
+    L.write_json(os.path.join(w.lib.clip_dir(a), "style-card.json"), CARD)
+    w.lib.update_meta(a, status="analyzed", view_count=1_400_000)
+    w.library_page.refresh()
+    w.open_clip(a)
+    w.detail.cmp_btn.click()                                   # from the clip page
+    assert w.stack.currentWidget() is w.library_page and not w.library_page.compare_bar.isHidden()
+    w.open_clip(a)                                             # same clip again: ignored, still picking
+    assert w.stack.currentWidget() is w.library_page
+    w.open_clip(b)
+    assert w.stack.currentWidget() is w.compare and w.library_page.compare_bar.isHidden()
+    texts = " ".join(l.text() for l in w.compare.findChildren(QLabel))
+    for need in ("เทียบ 2 คลิป", CARD["name_th"], "รอวิเคราะห์", "1.4M", "จุดตัดภาพ", "2 จุด", "เสียงวูบ (ฟิ้ว) 1", "สวัสดี", "#7A2E8E"):
+        assert need in texts, need
+    w.compare.open_clip.emit(b)
+    assert w.stack.currentWidget() is w.detail and w.detail.clip_id == b
+    # cancel works, and a deleted first pick clears the banner
+    w.start_compare(b)
+    w.library_page.set_compare(None)
+    w.open_clip(a)
+    assert w.stack.currentWidget() is w.detail
+
+
+def test_settings_speech_section(app, tmp_path, monkeypatch):
+    from stylevault import transcribe
+    w = make_window(tmp_path)
+    monkeypatch.setattr(transcribe, "find_cli", lambda: ["whisper-cli"])
+    monkeypatch.setattr(transcribe, "model_ready", lambda: False)
+    w.open_settings()
+    sp = w.settings_page
+    assert sp.speech_lbl.text() == "ยังไม่ได้ดาวน์โหลด" and not sp.speech_btn.isHidden()
+    got = []
+    sp.speech_ready.connect(lambda: got.append(1))
+    monkeypatch.setattr(transcribe, "download_model", lambda prog, stop: prog(0.5, "กำลังดาวน์โหลด… 1 / 2 MB"))
+    monkeypatch.setattr(transcribe, "model_ready", lambda: True)
+    sp.speech_btn.click()
+    assert wait_until(app, lambda: got, secs=5)
+    assert "พร้อมใช้งาน" in sp.speech_lbl.text() and sp.speech_btn.isHidden()

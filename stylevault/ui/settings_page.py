@@ -8,7 +8,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from .. import VERSION, tools
+from .. import VERSION, tools, transcribe
 from ..settings import Settings
 from . import theme
 
@@ -17,11 +17,14 @@ COPYRIGHT_TH = "คลิปในคลังใช้เพื่อศึก�
 
 class _Bg(QObject):
     done = Signal(bool, str)
+    speech_progress = Signal(float, str)
+    speech_done = Signal(bool, str)
 
 
 class SettingsPage(QWidget):
     back = Signal()
     library_changed = Signal(str)
+    speech_ready = Signal()
 
     def __init__(self, settings: Settings):
         super().__init__()
@@ -29,6 +32,10 @@ class SettingsPage(QWidget):
         self.s = settings
         self._bg = _Bg()
         self._bg.done.connect(self._update_done)
+        self._bg.speech_progress.connect(self._speech_progress)
+        self._bg.speech_done.connect(self._speech_done)
+        self._speech_stop = False
+        self._speech_busy = False
 
         outer = QVBoxLayout(self)                      # the page scrolls, so nothing gets squeezed on short windows
         outer.setContentsMargins(0, 0, 0, 0)
@@ -86,6 +93,32 @@ class SettingsPage(QWidget):
         h = QLabel("แพลตฟอร์มเปลี่ยนระบบบ่อย ถ้าโหลดคลิปไม่ได้ ให้กดปุ่มนี้ก่อน")
         h.setObjectName("Soft")
         root.addWidget(h)
+        root.addWidget(self._sep())
+
+        # speech -> text
+        root.addWidget(self._h("ถอดคำพูดในคลิป"))
+        sp = QLabel("ให้โปรแกรมฟังคำพูดในคลิปแล้วเขียนเป็นข้อความ (ภาษาไทยและภาษาอื่น) Claude จะได้รู้ว่าคลิปพูดอะไร ช่วงไหน "
+                    f"ทำในเครื่องนี้ทั้งหมด ต้องดาวน์โหลดตัวถอดคำพูดครั้งเดียว {transcribe.MODEL_SIZE_TH}")
+        sp.setObjectName("Soft")
+        sp.setWordWrap(True)
+        root.addWidget(sp)
+        self.speech_lbl = QLabel()
+        root.addWidget(self.speech_lbl)
+        srow = QHBoxLayout()
+        self.speech_btn = QPushButton("ดาวน์โหลดตัวถอดคำพูด")
+        self.speech_btn.clicked.connect(self._speech_download)
+        self.speech_cancel = QPushButton("ยกเลิก")
+        self.speech_cancel.clicked.connect(self._speech_cancel_clicked)
+        self.speech_cancel.hide()
+        srow.addWidget(self.speech_btn)
+        srow.addWidget(self.speech_cancel)
+        srow.addStretch(1)
+        root.addLayout(srow)
+        self.speech_msg = QLabel("")
+        self.speech_msg.setObjectName("Soft")
+        self.speech_msg.setWordWrap(True)
+        self.speech_msg.hide()
+        root.addWidget(self.speech_msg)
         root.addWidget(self._sep())
 
         # browser login
@@ -151,6 +184,54 @@ class SettingsPage(QWidget):
         self.browser.setCurrentIndex({"chrome": 0, "edge": 1, "firefox": 2}.get(self.s.browser, 0))
         self.browser.blockSignals(False)
         self._login_toggled(self.s.use_browser_login, save=False)
+        self._speech_state()
+
+    # ---- speech model
+    def _speech_state(self):
+        if self._speech_busy:
+            return
+        if not transcribe.find_cli():
+            self.speech_lbl.setText("โปรแกรมรุ่นนี้ไม่มีตัวถอดคำพูด")
+            self.speech_btn.hide()
+        elif transcribe.model_ready():
+            self.speech_lbl.setText("พร้อมใช้งาน — คลิปใหม่จะถูกถอดคำพูดให้เอง")
+            self.speech_btn.hide()
+        else:
+            self.speech_lbl.setText("ยังไม่ได้ดาวน์โหลด")
+            self.speech_btn.show()
+
+    def _speech_download(self):
+        self._speech_busy = True
+        self._speech_stop = False
+        self.speech_btn.hide()
+        self.speech_cancel.show()
+        self.speech_msg.setText("กำลังเริ่มดาวน์โหลด…")
+        self.speech_msg.show()
+
+        def work():
+            try:
+                transcribe.download_model(lambda f, t: self._bg.speech_progress.emit(f, t), lambda: self._speech_stop)
+                self._bg.speech_done.emit(True, "ดาวน์โหลดเสร็จแล้ว — กำลังถอดคำพูดคลิปเดิมในคลังให้ (ทำเบื้องหลัง)")
+            except transcribe.TranscribeError as e:
+                self._bg.speech_done.emit(False, str(e))
+            except Exception:
+                self._bg.speech_done.emit(False, "ดาวน์โหลดไม่สำเร็จ — ลองกดใหม่อีกครั้ง")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _speech_cancel_clicked(self):
+        self._speech_stop = True
+
+    def _speech_progress(self, f: float, text: str):
+        self.speech_lbl.setText(f"กำลังดาวน์โหลด {int(f * 100)}%")
+        self.speech_msg.setText(text)
+
+    def _speech_done(self, ok: bool, msg: str):
+        self._speech_busy = False
+        self.speech_cancel.hide()
+        self.speech_msg.setText(msg)
+        self._speech_state()
+        if ok:
+            self.speech_ready.emit()
 
     def _pick(self):
         d = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์เก็บคลัง", self.s.library_path())

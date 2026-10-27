@@ -87,11 +87,45 @@ def selftest() -> int:
         if hashlib.sha1(open(src, "rb").read()).hexdigest() != before["h"]:
             raise RuntimeError("original file was changed!")
 
+    def sound_names():
+        from . import sfxlabel
+        if not sfxlabel.available():
+            raise RuntimeError(f"YAMNet not available (model at {sfxlabel.model_path()})")
+        if len(sfxlabel.class_names()) != 521:
+            raise RuntimeError("class map broken")
+        beep = os.path.join(d, "beep.wav")
+        tools.run([tools.find_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=1000:duration=0.6",
+                   "-ac", "1", "-ar", "22050", beep], timeout=60)
+        res = sfxlabel.label_file(beep)
+        if not res:
+            raise RuntimeError("no label")
+        return f"beep -> {res}"
+
+    def speech_program():
+        from . import transcribe
+        cli = transcribe.find_cli()
+        if not cli:
+            raise RuntimeError("whisper-cli not bundled")
+        r = tools.run(cli + ["-h"], timeout=60, cwd=os.path.dirname(cli[-1]))
+        if "usage" not in (r.stdout + r.stderr).lower():
+            raise RuntimeError(f"whisper-cli did not run: code {r.returncode} {r.stderr[-300:]}")
+        model = os.environ.get("STYLEVAULT_TEST_WHISPER_MODEL")
+        if not model:
+            return f"{cli[-1]} runs (no model given, transcription not tried)"
+        os.environ["STYLEVAULT_WHISPER_MODEL"] = model
+        out = os.path.join(d, "transcript.json")
+        data = transcribe.transcribe(src, out)
+        if not os.path.isfile(out):
+            raise RuntimeError("no transcript.json")
+        return f"transcribed: language={data.get('language')} segments={len(data.get('segments') or [])}"
+
     check("Qt, font, video playback", qt_and_font)
     check("ffmpeg / ffprobe / yt-dlp", tool_versions)
     check("make test video", make_video)
     check("add a video file to the library", add_file)
     check("original file untouched", original_untouched)
+    check("sound-effect names (YAMNet)", sound_names)
+    check("speech to text (whisper)", speech_program)
 
     lines.append("RESULT: " + ("ALL PASSED" if ok else "FAILED"))
     try:

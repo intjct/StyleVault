@@ -78,6 +78,21 @@ class LibraryPage(QWidget):
         chips.addWidget(self.search)
         root.addLayout(chips)
 
+        self.compare_bar = QWidget()                   # "pick the 2nd clip to compare" banner
+        cb = QHBoxLayout(self.compare_bar)
+        cb.setContentsMargins(14, 8, 8, 8)
+        self.compare_bar.setStyleSheet(f"background:{theme.ACCENT_SOFT.name()}; border-radius:10px;")
+        self.compare_lbl = QLabel("")
+        self.compare_lbl.setStyleSheet(f"color:{theme.ACCENT.name()}; font-weight:500;")
+        cb.addWidget(self.compare_lbl, 1)
+        cancel = QPushButton("ยกเลิกการเทียบ")
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.clicked.connect(lambda: self.set_compare(None))
+        cb.addWidget(cancel)
+        self.compare_bar.hide()
+        root.addWidget(self.compare_bar)
+        self.compare_first: str | None = None
+
         self.grid = CardGrid()
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -120,6 +135,16 @@ class LibraryPage(QWidget):
             QGuiApplication.clipboard().setText(analyze_command(self.lib.root))
             self.copy_cmd.setText("คัดลอกแล้ว ✓ ไปวางในแชต Claude ได้เลย")
             QTimer.singleShot(2500, lambda: self.copy_cmd.setText("คัดลอกคำสั่งให้ Claude วิเคราะห์"))
+
+    def set_compare(self, clip_id: str | None, title: str = ""):
+        self.compare_first = clip_id
+        self.compare_lbl.setText(f"เทียบกับ \"{title}\" — กดการ์ดคลิปที่ 2 ที่อยากเทียบ" if clip_id else "")
+        self.compare_bar.setVisible(bool(clip_id))
+
+    def show_tag(self, tag: str):
+        self.chip["all"][0].setChecked(True)
+        self.filter_key = "all"
+        self.search.setText(tag)
 
     def _set_filter(self, key: str):
         self.filter_key = key

@@ -13,6 +13,7 @@ from ..settings import Settings
 from . import dialogs, theme
 from .detail_page import DetailPage
 from .library_page import LibraryPage
+from .compare_page import ComparePage
 from .settings_page import COPYRIGHT_TH, SettingsPage
 from .update_bar import UpdateBar
 
@@ -37,7 +38,8 @@ class MainWindow(QWidget):
         self.library_page = LibraryPage()
         self.detail = DetailPage()
         self.settings_page = SettingsPage(self.s)
-        for w in (self.library_page, self.detail, self.settings_page):
+        self.compare = ComparePage()
+        for w in (self.library_page, self.detail, self.settings_page, self.compare):
             self.stack.addWidget(w)
         self.update_bar = UpdateBar(is_busy=lambda: bool(self.jobs._active))
         self.settings_page.update_bar = self.update_bar
@@ -54,7 +56,12 @@ class MainWindow(QWidget):
         self.detail.back.connect(self.show_library)
         self.detail.delete_requested.connect(self.delete_clip)
         self.detail.retry_requested.connect(self.retry_clip)
+        self.detail.tag_clicked.connect(self.show_tag)
+        self.detail.compare_requested.connect(self.start_compare)
+        self.compare.back.connect(self.show_library)
+        self.compare.open_clip.connect(self.open_clip)
         self.settings_page.back.connect(self.show_library)
+        self.settings_page.speech_ready.connect(self._queue_extras)
         self.settings_page.library_changed.connect(self._library_changed)
 
         self.drop_hint = QLabel("ปล่อยไฟล์วิดีโอที่นี่เพื่อเพิ่มเข้าคลัง", self)
@@ -117,12 +124,25 @@ class MainWindow(QWidget):
                     self.jobs.add_prepare(cid)
                 else:
                     self.lib.update_meta(cid, status="error",
-                                         error="โปรแกรมถูกปิดก่อนโหลดคลิปเสร็จ — กดลองใหม่ (คลิกขวาที่การ์ด)")
+                                         error="โปรแกรมถูกปิดก่อนโหลดคลิปเสร็จ — กดปุ่ม ⋯ บนการ์ดแล้วเลือกลองใหม่")
             elif st in ("waiting", "analyzed") and not m.get("raw_ready") and self.lib.video_path(cid):
                 if st == "waiting":
                     self.lib.update_meta(cid, status="preparing")
                 self.jobs.add_prepare(cid)
         self.library_page.refresh()
+        self._queue_extras()
+
+    def _queue_extras(self):
+        """Sound names / spoken words for clips that were prepared before these existed (runs in the background)."""
+        from .. import prepare
+        for m in self.lib.list_meta():
+            cid = m["id"]
+            if m.get("raw_ready") and m.get("status") in ("waiting", "analyzed") and not self.jobs.is_active(cid):
+                try:
+                    if prepare.needs_extras(self.lib, cid):
+                        self.jobs.add_extras(cid)
+                except Exception:
+                    pass
 
     # ---- navigation
     def show_library(self):
@@ -131,8 +151,28 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.library_page)
 
     def open_clip(self, clip_id: str):
+        first = self.library_page.compare_first
+        if first and self.stack.currentWidget() is self.library_page:
+            if clip_id == first:
+                return
+            self.library_page.set_compare(None)
+            if self.lib.meta(first):
+                self.compare.show_pair(self.lib, first, clip_id)
+                self.stack.setCurrentWidget(self.compare)
+                return
         self.detail.show_clip(self.lib, clip_id)
         self.stack.setCurrentWidget(self.detail)
+
+    def show_tag(self, tag: str):
+        self.show_library()
+        self.library_page.show_tag(tag)
+
+    def start_compare(self, clip_id: str):
+        m = self.lib.meta(clip_id) or {}
+        card = self.lib.style_card(clip_id) if m.get("status") == "analyzed" else None
+        title = (card or {}).get("name_th") or m.get("title") or "คลิปนี้"
+        self.show_library()
+        self.library_page.set_compare(clip_id, title[:40])
 
     def open_settings(self):
         self.settings_page.load()
@@ -216,6 +256,7 @@ class MainWindow(QWidget):
         a_url = menu.addAction("เปิดลิงก์ต้นฉบับ") if m.get("source_url") else None
         a_dir = menu.addAction("เปิดโฟลเดอร์คลิป")
         a_retry = menu.addAction("ลองใหม่") if m.get("status") == "error" else None
+        a_cmp = menu.addAction("เทียบกับคลิปอื่น")
         menu.addSeparator()
         a_del = menu.addAction("ลบออกจากคลัง")
         act = menu.exec(pos)
@@ -227,6 +268,8 @@ class MainWindow(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.lib.clip_dir(clip_id)))
         elif act is a_retry:
             self.retry_clip(clip_id)
+        elif act is a_cmp:
+            self.start_compare(clip_id)
         elif act is a_del:
             self.delete_clip(clip_id)
 
@@ -256,6 +299,8 @@ class MainWindow(QWidget):
             dialogs.message(self, "ยังลบไม่ได้", "คลิปนี้กำลังโหลดอยู่ รอให้เสร็จก่อนแล้วค่อยลบ")
             return
         self.lib.delete_clip(clip_id)
+        if self.library_page.compare_first == clip_id:
+            self.library_page.set_compare(None)
         if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
             self.show_library()
         self.library_page.refresh()

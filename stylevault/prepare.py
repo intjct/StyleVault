@@ -252,8 +252,60 @@ def prepare(lib: Library, clip_id: str, progress) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
         raise PrepareError("เตรียมข้อมูลคลิปไม่สำเร็จ — กดลองใหม่ ถ้ายังไม่หายให้ลบแล้วเพิ่มคลิปใหม่")
     changes = {"raw_ready": True, "raw_version": VERSION, "error": None}
-    if (lib.meta(clip_id) or {}).get("status") in ("preparing", "error", "downloading"):
-        changes["status"] = "waiting"
     lib.update_meta(clip_id, **changes)
+    extras(lib, clip_id, lambda f, t: progress(0.97 + 0.03 * f, t))    # labels + speech: optional, never fatal
+    if (lib.meta(clip_id) or {}).get("status") in ("preparing", "error", "downloading"):
+        lib.update_meta(clip_id, status="waiting")
     lib.rebuild_index()
     progress(1.0, "เสร็จแล้ว")
+
+
+# ------------------------------------------------------------------ extras: sound names + spoken words
+
+def needs_extras(lib: Library, clip_id: str) -> bool:
+    """True when this clip could get sound-effect names or a transcript that it does not have yet."""
+    from . import sfxlabel, transcribe
+    raw = os.path.join(lib.clip_dir(clip_id), "raw")
+    audio = _read(os.path.join(raw, "audio.json"))
+    if not audio or not audio.get("has_audio"):
+        return False
+    if sfxlabel.available() and audio.get("sfx") and not audio.get("labels_version"):
+        return True
+    return transcribe.ready() and not os.path.isfile(os.path.join(raw, "transcript.json"))
+
+
+def extras(lib: Library, clip_id: str, progress=lambda f, t: None) -> None:
+    """Adds names to the sound effects (YAMNet) and the spoken words (whisper). Failures only skip that part."""
+    from . import sfxlabel, transcribe
+    raw = os.path.join(lib.clip_dir(clip_id), "raw")
+    apath = os.path.join(raw, "audio.json")
+    audio = _read(apath)
+    if not audio or not audio.get("has_audio"):
+        return
+    if sfxlabel.available() and audio.get("sfx") and not audio.get("labels_version"):
+        progress(0.05, "กำลังแยกชนิดเสียงเอฟเฟกต์…")
+        try:
+            sfxlabel.label_sfx(raw, audio["sfx"])
+            audio["labels_version"] = 1
+            write_json(apath, audio)
+        except Exception:
+            pass
+    video = lib.video_path(clip_id)
+    tpath = os.path.join(raw, "transcript.json")
+    if video and transcribe.ready() and not os.path.isfile(tpath):
+        progress(0.3, "กำลังถอดคำพูด…")
+        try:
+            data = transcribe.transcribe(video, tpath, lambda f, t: progress(0.3 + 0.7 * f, t))
+            lib.update_meta(clip_id, has_speech=data.get("has_speech"))
+        except Exception:
+            pass
+    progress(1.0, "เสร็จแล้ว")
+
+
+def _read(path: str):
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None

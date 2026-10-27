@@ -27,6 +27,8 @@ class DetailPage(QWidget):
     back = Signal()
     delete_requested = Signal(str)
     retry_requested = Signal(str)
+    tag_clicked = Signal(str)
+    compare_requested = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -145,6 +147,9 @@ class DetailPage(QWidget):
         self.extra_holder = QVBoxLayout()              # structure, Remotion recipe, limits
         self.extra_holder.setSpacing(12)
         self.right.addLayout(self.extra_holder)
+        self.speech_holder = QVBoxLayout()             # spoken words (whisper)
+        self.speech_holder.setSpacing(8)
+        self.right.addLayout(self.speech_holder)
 
         btns = QHBoxLayout()
         self.open_url_btn = QPushButton("เปิดลิงก์ต้นฉบับ")
@@ -153,6 +158,9 @@ class DetailPage(QWidget):
         self.open_dir_btn.clicked.connect(self._open_folder)
         btns.addWidget(self.open_url_btn)
         btns.addWidget(self.open_dir_btn)
+        self.cmp_btn = QPushButton("เทียบกับคลิปอื่น")
+        self.cmp_btn.clicked.connect(lambda: self.compare_requested.emit(self.clip_id))
+        btns.addWidget(self.cmp_btn)
         self.retry_btn = QPushButton("ลองโหลดใหม่")
         self.retry_btn.clicked.connect(lambda: self.retry_requested.emit(self.clip_id))
         btns.addWidget(self.retry_btn)
@@ -311,6 +319,7 @@ class DetailPage(QWidget):
         self._fill_timeline(m, card)
         self._fill_info(m)
         self._fill_extra(card)
+        self._fill_speech(m)
         self.open_url_btn.setVisible(bool(m.get("source_url")))
 
     # ---- helpers to build panels
@@ -379,7 +388,14 @@ class DetailPage(QWidget):
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(6)
         for i, t in enumerate(card.get("tags") or []):
-            tl.addWidget(self._pill(t, blue=(i == 0)))
+            b = QPushButton(t)                         # click a tag = show every clip with this tag
+            bg, fg = (theme.ACCENT_SOFT.name(), theme.ACCENT.name()) if i == 0 else (theme.SURFACE.name(), theme.TEXT_MID.name())
+            b.setStyleSheet(f"QPushButton {{ background:{bg}; color:{fg}; border:none; border-radius:12px; padding:4px 12px; "
+                            f"min-height:0; font-weight:500; }} QPushButton:hover {{ color:{theme.ACCENT.name()}; }}")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip("ดูคลิปทั้งหมดที่มีแท็กนี้")
+            b.clicked.connect(lambda _=False, t=t: self.tag_clicked.emit(t))
+            tl.addWidget(b)
         tl.addStretch(1)
         hl.addWidget(tags)
         if card.get("summary_th"):
@@ -456,7 +472,7 @@ class DetailPage(QWidget):
                 if not isinstance(s, dict) or not isinstance(s.get("t"), (int, float)):
                     continue
                 near = [x for x in labels if abs(x["t"] - s["t"]) <= 0.15]
-                label = (near[0].get("type_th") if near else None) or s.get("label")
+                label = (near[0].get("type_th") if near else None) or s.get("label_th")
                 sfx.append({"t": s["t"], "file": s.get("file") or "", "label": label})
         dur = m.get("duration_sec")
         show = bool(dur) and isinstance(cuts, dict)
@@ -520,6 +536,58 @@ class DetailPage(QWidget):
             l.setWordWrap(True)
             self.extra_holder.addWidget(l)
 
+    def _fill_speech(self, m: dict):
+        from .. import transcribe
+        self._clear(self.speech_holder)
+        if not self.lib:
+            return
+        raw = os.path.join(self.lib.clip_dir(m["id"]), "raw")
+        audio = L.read_json(os.path.join(raw, "audio.json"))
+        if not (isinstance(audio, dict) and audio.get("has_audio")):
+            return
+        h = QLabel("คำพูดในคลิป")
+        h.setObjectName("H2")
+        self.speech_holder.addWidget(h)
+        data = L.read_json(os.path.join(raw, "transcript.json"))
+        segs = data.get("segments") if isinstance(data, dict) and isinstance(data.get("segments"), list) else None
+        if segs is None:
+            note = QLabel("กำลังรอถอดคำพูด (ทำเบื้องหลัง)…" if transcribe.ready()
+                          else "ยังไม่ได้ถอดคำพูด — ดาวน์โหลดตัวถอดคำพูดได้ในหน้าตั้งค่า (ครั้งเดียว)")
+            note.setObjectName("Hint")
+            note.setWordWrap(True)
+            self.speech_holder.addWidget(note)
+            return
+        if not segs:
+            note = QLabel("ไม่มีเสียงพูดในคลิปนี้")
+            note.setObjectName("Soft")
+            self.speech_holder.addWidget(note)
+            return
+        frame = QFrame()
+        frame.setObjectName("Panel")
+        g = QGridLayout(frame)
+        g.setContentsMargins(12, 10, 16, 10)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(4)
+        g.setColumnStretch(1, 1)
+        for r, sg in enumerate(segs[:300]):
+            if not isinstance(sg, dict) or not isinstance(sg.get("from"), (int, float)):
+                continue
+            t = QPushButton(_fmt_time(sg["from"]))
+            t.setObjectName("Link")
+            t.setCursor(Qt.CursorShape.PointingHandCursor)
+            t.setToolTip("กระโดดไปช่วงนี้")
+            t.clicked.connect(lambda _=False, x=float(sg["from"]): self._seek_to(x))
+            txt = QLabel(str(sg.get("text") or ""))
+            txt.setWordWrap(True)
+            txt.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            g.addWidget(t, r, 0, Qt.AlignmentFlag.AlignTop)
+            g.addWidget(txt, r, 1)
+        self.speech_holder.addWidget(frame)
+        tip = QLabel("ถอดโดยโปรแกรมในเครื่อง อาจสะกดผิดบ้าง — กดเวลาด้านซ้ายเพื่อกระโดดไปช่วงนั้น")
+        tip.setObjectName("Soft")
+        tip.setWordWrap(True)
+        self.speech_holder.addWidget(tip)
+
     def _fill_info(self, m: dict):
         while self.info_grid.count():
             it = self.info_grid.takeAt(0)
@@ -544,6 +612,12 @@ class DetailPage(QWidget):
                 bpm = audio.get("bpm")
                 rows.append(("จังหวะเพลง (ครั้งต่อนาที)", str(bpm) if bpm else "จับจังหวะที่ชัดเจนไม่ได้"))
                 rows.append(("เสียงกระแทกที่จับได้", f"{len(audio.get('onsets_sec') or [])} จุด"))
+                kinds: dict[str, int] = {}
+                for x in audio.get("sfx") or []:
+                    if isinstance(x, dict) and x.get("label_th"):
+                        kinds[x["label_th"]] = kinds.get(x["label_th"], 0) + 1
+                if kinds:
+                    rows.append(("ชนิดเสียงที่ได้ยิน", "  ·  ".join(f"{k} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))))
                 rows.append(("เสียงเงียบ", "ไม่มีช่วงเงียบเลย (มีเพลงหรือเสียงคลอตลอด)" if not audio.get("silences")
                              else f"{len(audio['silences'])} ช่วง"))
         for i, (k, val) in enumerate(rows):

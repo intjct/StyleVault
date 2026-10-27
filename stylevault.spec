@@ -5,12 +5,19 @@ import os
 tools = [(f"build_tools/{n}", "tools") for n in ("ffmpeg.exe", "ffprobe.exe", "yt-dlp.exe", "FFMPEG-LICENSE.txt")
          if os.path.exists(f"build_tools/{n}")]
 
+# sound-effect names (YAMNet) and speech-to-text (whisper.cpp), also downloaded by the workflow
+extra = [("assets/yamnet_class_map.csv", "assets")]
+if os.path.exists("build_tools/yamnet.onnx"):
+    extra.append(("build_tools/yamnet.onnx", "models"))
+if os.path.isdir("build_tools/whisper"):
+    extra.append(("build_tools/whisper", "tools/whisper"))
+
 a = Analysis(
     ["run.py"],
     pathex=["."],
     binaries=[],
     datas=[("assets/stylevault.ico", "assets"), ("assets/stylevault.png", "assets"),
-           ("assets/fonts", "assets/fonts"), ("LICENSE", ".")] + tools,
+           ("assets/fonts", "assets/fonts"), ("LICENSE", ".")] + tools + extra,
     excludes=["tkinter", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtQuick3D",
               "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtDesigner",
               "PySide6.QtUiTools", "PySide6.QtHelp", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",

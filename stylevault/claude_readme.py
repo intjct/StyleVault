@@ -15,12 +15,14 @@ clips/<วันที่เพิ่ม>_<แพลตฟอร์ม>_<id>/
   meta.json                ← โปรแกรมเขียน (Claude แก้ได้เฉพาะช่อง status)
   raw/                     ← โปรแกรมเขียน: ข้อมูลดิบที่วัดจากคลิปจริง
     cuts.json              จุดตัด (cuts_sec), ความเร็วเฉลี่ยต่อช็อต, motion_curve ทุก 0.5 วิ
-    audio.json             ความดัง, ช่วงเงียบ, จุดเสียงกระแทก (onsets_sec), onsets_near_cut, bpm, sfx[]
+    audio.json             ความดัง, ช่วงเงียบ, จุดเสียงกระแทก (onsets_sec), onsets_near_cut, bpm,
+                           sfx[] = {{t, file, label (ชื่อเสียงภาษาอังกฤษจาก AudioSet), label_th, confidence 0–1}}
     frames/                ภาพนิ่งตั้งชื่อ <ลำดับ>_<วินาที>s.jpg (ไม่เกิน 30 ภาพ)
     contact-sheet.jpg      ภาพรวมทั้งคลิปในภาพเดียว (ดูอันนี้ก่อน)
     waveform.png           รูปคลื่นเสียง
     sfx/                   ไฟล์เสียงสั้นรอบแต่ละจุดเสียงกระแทก (ชื่อ <ลำดับ>_<วินาที>s.wav)
-    transcript.json        บทพูด (เวอร์ชันหลังๆ)
+    transcript.json        คำพูดในคลิป: {{language, segments: [{{from, to, text}}], text, has_speech}}
+                           (มีเมื่อแตมดาวน์โหลดตัวถอดคำพูดแล้ว ; ถอดด้วยโปรแกรมในเครื่อง อาจสะกดผิดบ้าง)
   style-card.json          ← Claude เขียนเท่านั้น (โปรแกรมไม่เขียนทับ)
   notes.md                 ← แตมเขียนเอง ให้น้ำหนักมากที่สุด
 ```
@@ -29,7 +31,7 @@ meta.json: `kind` = effects (สไตล์เอฟเฟกต์) หรื�
 
 ## เมื่อแตมพิมพ์ "วิเคราะห์คลิปใหม่"
 1. อ่าน `library-index.json` หาคลิปที่ `status = waiting`
-2. ต่อคลิป: อ่าน `meta.json`, `raw/cuts.json`, `raw/audio.json`, `notes.md` → ดู `raw/contact-sheet.jpg` ก่อน → ดูภาพใน `raw/frames/` เพิ่มเฉพาะช่วงที่จุดตัดถี่หรือสงสัย (ประหยัดโทเค็น)
+2. ต่อคลิป: อ่าน `meta.json`, `raw/cuts.json`, `raw/audio.json`, `raw/transcript.json` (ถ้ามี), `notes.md` → ดู `raw/contact-sheet.jpg` ก่อน → ดูภาพใน `raw/frames/` เพิ่มเฉพาะช่วงที่จุดตัดถี่หรือสงสัย (ประหยัดโทเค็น)
 3. เขียน `style-card.json` ตาม schema ด้านล่างเป๊ะ (ภาษาไทยทุกช่อง `_th`)
 4. แก้ `meta.json` เฉพาะ `status` เป็น `"analyzed"`
 5. ตอบแตมเป็นตารางสั้น: คลิป | ชื่อสไตล์ | แท็ก
@@ -37,7 +39,9 @@ meta.json: `kind` = effects (สไตล์เอฟเฟกต์) หรื�
 
 กฎการวิเคราะห์: ตัวเลขทุกตัว (จุดตัด เวลาเสียง BPM) ต้องมาจากไฟล์ใน raw/ ไม่เดา ; สิ่งที่ดูจากภาพแล้วไม่แน่ใจให้ใส่ใน `limits_th` ;
 ให้น้ำหนักกับ `notes.md` มากที่สุด ; `kind=viral` ต้องมี `structure` อย่างน้อย ฮุก/เนื้อ/ปิด ; `kind=effects` ต้องมี `remotion_recipe` ที่ทำซ้ำได้จริง
-ข้อควรรู้: `onsets_sec` คือจุดที่เสียงดังพุ่งขึ้นกะทันหัน อาจเป็นเสียงเอฟเฟกต์หรือคำพูดก็ได้ ต้องฟัง `raw/sfx/` หรือดูบริบทภาพประกอบ
+ข้อควรรู้: `onsets_sec` คือจุดที่เสียงดังพุ่งขึ้นกะทันหัน อาจเป็นเสียงเอฟเฟกต์หรือคำพูดก็ได้ ;
+`sfx[].label_th` มาจากโมเดลแยกเสียงในเครื่อง (ใช้เป็นจุดตั้งต้น ถ้า confidence ต่ำกว่า 0.2 ให้ถือว่าไม่แน่ใจ) — ใช้ประกอบตอนเขียน `audio.sfx_th`
+ถ้ามี `transcript.json` ให้ใช้เขียน `audio.voice_th` และ `structure` (ฮุกพูดว่าอะไร ช่วงไหน)
 
 ## schema ของ style-card.json
 ```json

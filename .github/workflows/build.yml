@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +24,7 @@ jobs:
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt "pyinstaller>=6.10" pytest
+          pip install -r requirements.txt "pyinstaller>=6.10" pytest onnx
 
       - name: Download ffmpeg, ffprobe and yt-dlp
         run: |
@@ -49,11 +49,33 @@ jobs:
           & build_tools\ffmpeg.exe -hide_banner -version | Select-Object -First 1
           & build_tools\yt-dlp.exe --version
 
+      - name: Download the sound-name model (YAMNet) and the speech-to-text program (whisper.cpp)
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $ok = $false
+          foreach ($u in @("https://huggingface.co/audiomagic/yamnet-onnx/resolve/main/yamnet.onnx",
+                            "https://huggingface.co/andrelgomes/yamnet-onnx/resolve/main/yamnet.onnx")) {
+            try { Invoke-WebRequest $u -OutFile build_tools\yamnet.onnx -TimeoutSec 300; $ok = $true; break }
+            catch { Write-Host "Download failed from $u, trying next..." }
+          }
+          if (-not $ok -or (Get-Item build_tools\yamnet.onnx).Length -lt 1000000) { throw "Could not download yamnet.onnx" }
+          Invoke-WebRequest "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip" -OutFile whisper.zip -TimeoutSec 300
+          Expand-Archive whisper.zip -DestinationPath whisper_tmp
+          $cli = Get-ChildItem whisper_tmp -Recurse -Filter whisper-cli.exe | Select-Object -First 1
+          if (-not $cli) { throw "whisper-cli.exe not found in the zip" }
+          New-Item -ItemType Directory -Force build_tools\whisper | Out-Null
+          Copy-Item $cli.FullName build_tools\whisper\
+          Copy-Item "$($cli.DirectoryName)\*.dll" build_tools\whisper\
+          Copy-Item "$($cli.DirectoryName)\..\LICENSE*" build_tools\whisper\ -ErrorAction SilentlyContinue
+          Invoke-WebRequest "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile ggml-tiny.bin -TimeoutSec 300
+          Get-ChildItem build_tools -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+
       - name: Run tests
         run: |
           $env:PATH = "$PWD\build_tools;$env:PATH"
           $env:QT_QPA_PLATFORM = "offscreen"
           $env:STYLEVAULT_NO_MEDIA = "1"
+          $env:STYLEVAULT_YAMNET = "$PWD\build_tools\yamnet.onnx"
           python -m pytest -q tests
 
       - name: Build StyleVault.exe
@@ -61,6 +83,7 @@ jobs:
 
       - name: Self-test the finished program
         run: |
+          $env:STYLEVAULT_TEST_WHISPER_MODEL = "$PWD\ggml-tiny.bin"
           $p = Start-Process -FilePath "dist\StyleVault\StyleVault.exe" -ArgumentList "--selftest" -PassThru
           if (-not $p.WaitForExit(300000)) { $p.Kill(); throw "selftest timed out" }
           Get-Content "$env:TEMP\stylevault-selftest.txt"

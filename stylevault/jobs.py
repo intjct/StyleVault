@@ -32,6 +32,9 @@ class Jobs(QObject):
     def add_file(self, clip_id: str, path: str):
         self._enqueue(("file", clip_id, path))
 
+    def add_extras(self, clip_id: str):
+        self._enqueue(("extras", clip_id, None))
+
     def add_prepare(self, clip_id: str):
         self._enqueue(("prepare", clip_id, None))
 
@@ -53,6 +56,9 @@ class Jobs(QObject):
                         prepare.prepare(lib, clip_id, prog)
                     except prepare.PrepareError as e:
                         raise ingest.IngestError(str(e))
+                elif kind == "extras":
+                    from . import prepare
+                    prepare.extras(lib, clip_id, prog)
                 elif kind == "link":
                     ingest.download(lib, clip_id, arg, settings, prog)
                 else:
