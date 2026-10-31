@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
-from ..library import Library
+from ..library import Library, num_label
 from . import theme
 from .cards import Card, CardGrid
 
@@ -72,7 +72,7 @@ class LibraryPage(QWidget):
         self.copy_cmd.hide()
         chips.addWidget(self.copy_cmd)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("ค้นหาชื่อหรือแท็ก")
+        self.search.setPlaceholderText("ค้นหาชื่อ แท็ก หรือเลข เช่น #4")
         self.search.setFixedWidth(220)
         self.search.textChanged.connect(self._set_query)
         chips.addWidget(self.search)
@@ -160,6 +160,8 @@ class LibraryPage(QWidget):
             return False
         if k == "waiting" and m.get("status") not in ("waiting", "downloading", "preparing"):
             return False
+        if self.query.startswith("#"):                       # "#4" finds clip number 4 exactly
+            return num_label(m).lower() == self.query
         if self.query:
             hay = " ".join([m.get("title") or "", m.get("uploader") or "",
                             (card or {}).get("name_th") or "", " ".join((card or {}).get("tags") or [])]).lower()

@@ -486,3 +486,36 @@ def test_settings_offers_the_better_speech_model(app, tmp_path, monkeypatch):
     sp = w.settings_page
     assert "รุ่นใหม่" in sp.speech_lbl.text() and sp.speech_btn.text() == "ดาวน์โหลดตัวถอดรุ่นใหม่"
     assert "570 MB" in " ".join(l.text() for l in sp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
+
+
+# ---------------------------------------------------------------- v0.6.0: clip numbers
+def test_clip_numbers_show_everywhere_and_search_by_number(app, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    w = make_window(tmp_path)
+    seed(w.lib, 5)                                             # #1 .. #5
+    w.library_page.refresh()
+    p = w.library_page
+    assert sorted(c.meta["number"] for c in p.grid.cards) == [1, 2, 3, 4, 5]
+    p.search.setText("#4")                                     # exact: #4 only, not #40 or a title with a 4
+    assert [c.meta["number"] for c in p.grid.cards] == [4]
+    p.search.setText("#9")
+    assert len(p.grid.cards) == 0
+    p.search.setText("")
+    assert len(p.grid.cards) == 5
+    # a card paints with its number without errors (pill next to the platform badge)
+    c = p.grid.cards[0]
+    c.resize(220, Card.height_for(220))
+    assert not c.grab().isNull()
+    # clip page and compare page show the number
+    first = next(c for c in p.grid.cards if c.meta["number"] == 2).clip_id
+    second = next(c for c in p.grid.cards if c.meta["number"] == 3).clip_id
+    w.open_clip(first)
+    assert "#2" in w.detail.badges.text()
+    w.start_compare(first)
+    assert "#2" in p.compare_lbl.text()
+    w.open_clip(second)
+    texts = " ".join(l.text() for l in w.compare.findChildren(QLabel))
+    assert "#2" in texts and "#3" in texts
+    # Claude's guide and index know about the numbers
+    guide = open(os.path.join(w.lib.root, "CLAUDE-README.md"), encoding="utf-8").read()
+    assert "`number`" in guide and "#4" in guide

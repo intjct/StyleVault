@@ -101,6 +101,7 @@ class Library:
         self.root = root
         self.clips_dir = os.path.join(root, "clips")
         os.makedirs(self.clips_dir, exist_ok=True)
+        self.assign_missing_numbers()
 
     # ---- paths
     def clip_dir(self, clip_id: str) -> str:
@@ -153,14 +154,50 @@ class Library:
                 return name
         return None
 
+    # ---- clip numbers (#1, #2 ... in the order clips were added; never reused after a delete)
+    def _counter_path(self) -> str:
+        return os.path.join(self.root, "library-counter.json")
+
+    def _next_number(self) -> int:
+        """Next free number: the saved counter, or one past the highest number still on disk."""
+        saved = read_json(self._counter_path())
+        n = saved.get("next") if isinstance(saved, dict) else None
+        n = n if isinstance(n, int) and n >= 1 else 1
+        used = [m.get("number") for m in (self.meta(i) for i in self.list_ids()) if m]
+        used = [x for x in used if isinstance(x, int)]
+        return max(n, max(used) + 1 if used else 1)
+
+    def assign_missing_numbers(self) -> None:
+        """Gives a number to every clip that has none (clips from older versions), oldest first."""
+        with _lock:
+            missing = [m for m in (self.meta(i) for i in self.list_ids()) if m and not isinstance(m.get("number"), int)]
+            if not missing:
+                return
+            missing.sort(key=lambda m: (m.get("added_at") or "", m.get("id") or ""))
+            n = self._next_number()
+            for m in missing:
+                self.update_meta(m["id"], number=n)
+                n += 1
+            write_json(self._counter_path(), {"next": n})
+
+    def number_of(self, clip_id: str) -> int | None:
+        n = (self.meta(clip_id) or {}).get("number")
+        return n if isinstance(n, int) else None
+
     # ---- creating clips
     def create_clip(self, platform: str, short_id: str, kind: str, source_url: str | None,
                     title: str = "", status: str = "downloading") -> str:
         with _lock:
             clip_id = f"{datetime.now().strftime('%Y-%m-%d')}_{platform}_{safe_part(short_id)}"
             os.makedirs(self.clip_dir(clip_id), exist_ok=True)
+            kept = (self.meta(clip_id) or {}).get("number")
+            if isinstance(kept, int):
+                number = kept                                    # same clip added again: keep its number
+            else:
+                number = self._next_number()
+                write_json(self._counter_path(), {"next": number + 1})
             write_json(self.meta_path(clip_id), {
-                "id": clip_id, "source_url": source_url, "platform": platform, "kind": kind,
+                "id": clip_id, "number": number, "source_url": source_url, "platform": platform, "kind": kind,
                 "title": title, "uploader": None, "upload_date": None,
                 "view_count": None, "like_count": None, "duration_sec": None,
                 "width": None, "height": None, "fps": None,
@@ -195,7 +232,7 @@ class Library:
             card = read_json(os.path.join(self.clip_dir(m["id"]), "style-card.json"))
             card = card if isinstance(card, dict) else {}
             items.append({
-                "id": m["id"], "kind": m.get("kind"), "platform": m.get("platform"),
+                "id": m["id"], "number": m.get("number"), "kind": m.get("kind"), "platform": m.get("platform"),
                 "status": m.get("status"), "view_count": m.get("view_count"),
                 "name_th": card.get("name_th"), "tags": card.get("tags") or [],
                 "summary_th": card.get("summary_th"), "fit_for_th": card.get("fit_for_th") or [],
@@ -210,6 +247,12 @@ class Library:
         from . import stylecard
         c = read_json(os.path.join(self.clip_dir(clip_id), "style-card.json"))
         return c if isinstance(c, dict) and not stylecard.validate(c) else None
+
+
+def num_label(meta: dict | None) -> str:
+    """'#4' for a clip that has a number, otherwise an empty string."""
+    n = (meta or {}).get("number")
+    return f"#{n}" if isinstance(n, int) else ""
 
 
 def fmt_views(n) -> str:

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainT
 
 from .. import library as L
 from .. import stylecard as SC
-from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views
+from ..library import KIND_LABEL, PLATFORM_LABEL, Library, fmt_views, num_label
 from . import theme
 from ..sfxlabel import BACKGROUND
 from .timeline import Timeline
@@ -351,7 +351,7 @@ class DetailPage(QWidget):
         m = lib.meta(clip_id) or {}
         card = lib.style_card(clip_id) if m.get("status") == "analyzed" else None
         self.title_lbl.setText((card or {}).get("name_th") or m.get("title") or "คลิปที่ไม่มีชื่อ")
-        bits = [PLATFORM_LABEL.get(m.get("platform"), ""), KIND_LABEL.get(m.get("kind"), "")]
+        bits = [num_label(m), PLATFORM_LABEL.get(m.get("platform"), ""), KIND_LABEL.get(m.get("kind"), "")]
         if m.get("view_count") is not None:
             bits.append(f"วิว {fmt_views(m['view_count'])}")
         if m.get("like_count") is not None:

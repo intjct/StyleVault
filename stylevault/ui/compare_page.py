@@ -138,6 +138,11 @@ class ComparePage(QWidget):
             else:
                 pic.setText("ยังไม่มีภาพปก")
             hl.addWidget(pic)
+            num = L.num_label(lib.meta(cid))
+            if num:
+                nl = QLabel(num)
+                nl.setStyleSheet(f"color:{theme.ACCENT.name()}; font-size:16px; font-weight:600;")
+                hl.addWidget(nl)
             ob = QPushButton("เปิดคลิปนี้")
             ob.setCursor(Qt.CursorShape.PointingHandCursor)
             ob.clicked.connect(lambda _=False, c=cid: self.open_clip.emit(c))

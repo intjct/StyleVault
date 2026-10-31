@@ -5,7 +5,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap, QTextLayout, QTextOption
 from PySide6.QtWidgets import QWidget
 
-from ..library import PLATFORM_LABEL, KIND_LABEL, fmt_views
+from ..library import PLATFORM_LABEL, KIND_LABEL, fmt_views, num_label
 from . import theme
 
 CARD_MIN_W = 200
@@ -147,8 +147,12 @@ class Card(QWidget):
 
     def _badge_platform(self, p):
         label = PLATFORM_LABEL.get(self.meta.get("platform"), "")
+        x = 8
         if label:
-            self._pill(p, 8, 8, label, QColor(255, 255, 255, 235), theme.TEXT)
+            x += self._pill(p, 8, 8, label, QColor(255, 255, 255, 235), theme.TEXT) + 6
+        num = num_label(self.meta)
+        if num:
+            self._pill(p, x, 8, num, theme.ACCENT, QColor("white"))
 
     def _badge_views(self, p, ih):
         v = fmt_views(self.meta.get("view_count"))

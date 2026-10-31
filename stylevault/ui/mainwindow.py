@@ -178,8 +178,9 @@ class MainWindow(QWidget):
         m = self.lib.meta(clip_id) or {}
         card = self.lib.style_card(clip_id) if m.get("status") == "analyzed" else None
         title = (card or {}).get("name_th") or m.get("title") or "คลิปนี้"
+        num = L.num_label(m)
         self.show_library()
-        self.library_page.set_compare(clip_id, title[:40])
+        self.library_page.set_compare(clip_id, (f"{num} " if num else "") + title[:40])
 
     def open_settings(self):
         self.settings_page.load()

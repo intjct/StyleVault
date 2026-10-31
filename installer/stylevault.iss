@@ -3,7 +3,7 @@
 ; the settings and the library (they live in %APPDATA% and Documents, not in the program folder).
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.5.2"
+  #define MyAppVersion "0.6.0"
 #endif
 
 [Setup]
