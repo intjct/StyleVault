@@ -119,7 +119,19 @@ def selftest() -> int:
             raise RuntimeError("no transcript.json")
         return f"transcribed: language={data.get('language')} segments={len(data.get('segments') or [])}"
 
+    def cert_list():
+        import certifi
+        p = certifi.where()
+        if not os.path.isfile(p) or os.path.getsize(p) < 100_000:
+            raise RuntimeError(f"certificate list missing: {p}")
+        from .tgbot import ssl_context
+        n = len(ssl_context().get_ca_certs())
+        if n < 100:
+            raise RuntimeError(f"only {n} trusted certificates loaded")
+        return f"{n} trusted certificates"
+
     check("Qt, font, video playback", qt_and_font)
+    check("certificate list for Telegram", cert_list)
     check("ffmpeg / ffprobe / yt-dlp", tool_versions)
     check("make test video", make_video)
     check("add a video file to the library", add_file)

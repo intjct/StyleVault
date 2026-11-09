@@ -21,6 +21,20 @@ MAX_WRONG_CODES = 5
 KIND_TH = {"effects": "สไตล์เอฟเฟกต์", "viral": "คลิปไวรัล"}
 
 
+def ssl_context():
+    """Windows' own list of trusted certificate makers, plus the Mozilla list (the one Firefox uses).
+    Windows only keeps roots it has needed before, so a root that Chrome would fetch on demand can be missing
+    for this program ("self-signed certificate in certificate chain"). Checking stays fully on."""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
 class TgError(Exception):
     def __init__(self, kind: str, message: str = "", detail: str = ""):
         super().__init__(message or kind)
@@ -63,12 +77,13 @@ class Api:
     def __init__(self, token: str, transport=None):
         self.token = token
         self._transport = transport or self._http
+        self._ctx = ssl_context() if transport is None else None
 
     def _http(self, url: str, payload: dict, timeout: float) -> dict:
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                      headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=self._ctx) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             try:

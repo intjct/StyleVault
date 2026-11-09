@@ -264,3 +264,11 @@ def test_network_failures_explain_themselves():
         with pytest.raises(tgbot.TgError) as e:
             api.call("getMe")
     assert e.value.kind == "auth"
+
+
+def test_ssl_context_has_mozilla_roots_and_still_verifies():
+    import ssl
+    ctx = tgbot.ssl_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert len(ctx.get_ca_certs()) > 100
+    assert tgbot.Api("T")._ctx is not None
