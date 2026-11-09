@@ -38,6 +38,10 @@ class Jobs(QObject):
     def add_prepare(self, clip_id: str):
         self._enqueue(("prepare", clip_id, None))
 
+    def cancel(self, clip_id: str):
+        """Stop a clip that is loading (or waiting in line) - used when the user deletes it."""
+        ingest.cancel(clip_id)
+
     def _enqueue(self, job):
         self._active.add(job[1])
         self._q.put((self._lib(), self._settings(), job))
@@ -47,6 +51,11 @@ class Jobs(QObject):
         while True:
             lib, settings, (kind, clip_id, arg) = self._q.get()
             lib: Library
+            if kind in ("link", "file") and ingest.is_cancelled(clip_id):      # deleted while waiting in line
+                ingest.clear_cancel(clip_id)
+                self._active.discard(clip_id)
+                self.changed.emit(clip_id)
+                continue
             def prog(frac, text, cid=clip_id):
                 self.progress.emit(cid, frac, text)
             try:
@@ -63,12 +72,16 @@ class Jobs(QObject):
                     ingest.download(lib, clip_id, arg, settings, prog)
                 else:
                     ingest.add_file(lib, clip_id, arg, prog)
+            except ingest.Cancelled:
+                pass                                                          # the window deletes the clip next
             except ingest.IngestError as e:
                 lib.update_meta(clip_id, status="error", error=str(e), error_detail=getattr(e, "detail", "") or None)
             except Exception:
                 lib.update_meta(clip_id, status="error",
                                 error="เกิดข้อผิดพลาดที่ไม่คาดคิด — กดลองใหม่ ถ้ายังไม่หายให้ลบแล้วเพิ่มใหม่")
             finally:
+                if kind in ("link", "file"):
+                    ingest.clear_cancel(clip_id)
                 self._active.discard(clip_id)
                 try:
                     lib.rebuild_index()

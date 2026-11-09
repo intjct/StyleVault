@@ -8,9 +8,59 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 
 from . import tools
 from .library import Library
+
+STALL_SEC = 120          # a download that prints nothing for this long is stuck
+TOTAL_SEC = 1800         # nothing should take longer than 30 minutes
+INFO_SEC = 90            # reading a link's info should take seconds
+_procs: dict[str, subprocess.Popen] = {}
+_cancelled: set[str] = set()
+
+
+class Cancelled(Exception):
+    """The user asked to stop (delete) this clip while it was loading."""
+
+
+def cancel(clip_id: str) -> None:
+    _cancelled.add(clip_id)
+    p = _procs.get(clip_id)
+    if p:
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+def clear_cancel(clip_id: str) -> None:
+    _cancelled.discard(clip_id)
+
+
+def is_cancelled(clip_id: str) -> bool:
+    return clip_id in _cancelled
+
+
+def _run_ytdlp(cmd: list[str], clip_id: str | None, timeout: float) -> subprocess.CompletedProcess:
+    """Like tools.run, but can be stopped from outside and never waits forever."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                         errors="replace", creationflags=tools.NO_WINDOW)
+    if clip_id:
+        _procs[clip_id] = p
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise IngestError("อ่านข้อมูลคลิปนานเกินไป (เน็ตช้าหรือแพลตฟอร์มไม่ตอบ) — กดลองใหม่อีกครั้ง")
+    finally:
+        if clip_id:
+            _procs.pop(clip_id, None)
+    if clip_id and is_cancelled(clip_id):
+        raise Cancelled()
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 class IngestError(Exception):
@@ -56,16 +106,16 @@ def _cookie_args(settings) -> list[str]:
     return []
 
 
-def fetch_info(url: str, settings) -> dict:
+def fetch_info(url: str, settings, clip_id: str | None = None) -> dict:
     cmd = tools.find_ytdlp()
     if not cmd:
         raise IngestError("ไม่พบตัวโหลดคลิปในโปรแกรม — ลองติดตั้งโปรแกรมทับใหม่")
     base = cmd + ["-J", "--no-playlist", "--no-warnings"]
     cookies = _cookie_args(settings)
     guest = False
-    r = tools.run(base + cookies + [url], timeout=120)
+    r = _run_ytdlp(base + cookies + [url], clip_id, INFO_SEC)
     if r.returncode != 0 and cookies and cookie_problem(r.stderr or r.stdout):
-        r2 = tools.run(base + [url], timeout=120)              # login could not be read: try as a guest first
+        r2 = _run_ytdlp(base + [url], clip_id, INFO_SEC)              # login could not be read: try as a guest first
         if r2.returncode == 0:
             r = r2
             guest = True
@@ -85,7 +135,7 @@ def fetch_info(url: str, settings) -> dict:
 def download(lib: Library, clip_id: str, url: str, settings, progress) -> None:
     """progress(fraction 0..1, text). Raises IngestError."""
     progress(0.02, "กำลังอ่านข้อมูลคลิป…")
-    info = fetch_info(url, settings)
+    info = fetch_info(url, settings, clip_id)
     up = info.get("upload_date")
     if isinstance(up, str) and re.fullmatch(r"\d{8}", up):
         up = f"{up[:4]}-{up[4:6]}-{up[6:]}"
@@ -122,13 +172,38 @@ def download(lib: Library, clip_id: str, url: str, settings, progress) -> None:
     progress(0.05, "กำลังโหลดคลิป…")
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace", creationflags=tools.NO_WINDOW)
+    _procs[clip_id] = p
+    state = {"last": time.time(), "stuck": False, "done": False}
+    started = time.time()
+
+    def watchdog():
+        while not state["done"]:
+            time.sleep(1)
+            now = time.time()
+            if now - state["last"] > STALL_SEC or now - started > TOTAL_SEC:
+                state["stuck"] = True
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                return
+    threading.Thread(target=watchdog, daemon=True).start()
     tail: list[str] = []
-    for line in p.stdout:                                # type: ignore[union-attr]
-        tail = (tail + [line.strip()])[-12:]
-        m = re.search(r"\[download\]\s+([\d.]+)%", line)
-        if m:
-            progress(0.05 + 0.85 * float(m.group(1)) / 100, "กำลังโหลดคลิป…")
-    p.wait()
+    try:
+        for line in p.stdout:                            # type: ignore[union-attr]
+            state["last"] = time.time()
+            tail = (tail + [line.strip()])[-12:]
+            m = re.search(r"\[download\]\s+([\d.]+)%", line)
+            if m:
+                progress(0.05 + 0.85 * float(m.group(1)) / 100, "กำลังโหลดคลิป…")
+        p.wait()
+    finally:
+        state["done"] = True
+        _procs.pop(clip_id, None)
+    if is_cancelled(clip_id):
+        raise Cancelled()
+    if state["stuck"]:
+        raise IngestError("โหลดคลิปค้างนานเกินไป (เน็ตช้าหรือแพลตฟอร์มไม่ตอบ) — กดลองใหม่อีกครั้ง", "\n".join(tail))
     video = _find_video(out_dir)
     if p.returncode != 0 or not video:
         raise IngestError(friendly_error("\n".join(tail)), "\n".join(tail))

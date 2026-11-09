@@ -75,6 +75,7 @@ class MainWindow(QWidget):
         self.settings_page.bind_telegram(self.tg)
         self.settings_page.tg_changed.connect(self._refresh_tray)
         self._tg_clips: dict[str, int] = {}                    # clip id -> chat to tell when it is done
+        self._delete_after: set[str] = set()                   # clips to delete as soon as their loading is stopped
         self._quitting = False
         self.tray: QSystemTrayIcon | None = None
         self._setup_tray()
@@ -394,6 +395,11 @@ class MainWindow(QWidget):
 
     # ---- jobs
     def _job_changed(self, clip_id: str):
+        if clip_id in self._delete_after and not self.jobs.is_active(clip_id):
+            self._delete_after.discard(clip_id)
+            self._tg_clips.pop(clip_id, None)
+            self._remove_clip(clip_id)
+            return
         self._tg_report(clip_id)
         self.library_page.refresh()
         if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
@@ -448,8 +454,12 @@ class MainWindow(QWidget):
                                "ไฟล์ต้นฉบับที่คุณเคยลากมาวางจะไม่ถูกแตะต้อง",
                                "ลบ", "ยกเลิก"):
             return
-        if self.jobs.is_active(clip_id):
-            dialogs.message(self, "ยังลบไม่ได้", "คลิปนี้กำลังโหลดอยู่ รอให้เสร็จก่อนแล้วค่อยลบ")
+        self._remove_clip(clip_id)
+
+    def _remove_clip(self, clip_id: str):
+        if self.jobs.is_active(clip_id):                           # stop the loading first, delete right after it stops
+            self._delete_after.add(clip_id)
+            self.jobs.cancel(clip_id)
             return
         self.lib.delete_clip(clip_id)
         if self.library_page.compare_first == clip_id:

@@ -554,3 +554,17 @@ def test_script_filter_chip_lists_only_clips_with_a_script(app, tmp_path):
     assert p.chip["script"][0].text() == "มีสคริปต์ 1"
     p._set_filter("script")
     assert [c.clip_id for c in p.grid.cards] == [a]
+
+
+def test_delete_works_while_a_clip_is_still_loading(app, tmp_path, monkeypatch):
+    w = make_window(tmp_path)
+    cid = w.lib.create_clip("instagram", "stuck", "viral", "https://www.instagram.com/reel/stuck/")
+    monkeypatch.setattr(dialogs, "message", lambda *a, **k: True)
+    w.jobs._active.add(cid)                                 # pretend a download is running
+    stopped = []
+    monkeypatch.setattr(w.jobs, "cancel", lambda c: stopped.append(c))
+    w.delete_clip(cid)
+    assert stopped == [cid] and w.lib.meta(cid) is not None   # asked it to stop, not deleted yet
+    w.jobs._active.discard(cid)                             # the job has stopped
+    w._job_changed(cid)
+    assert w.lib.meta(cid) is None

@@ -73,3 +73,54 @@ def test_cookie_problem_message_and_detail():
     assert "ปิดเบราว์เซอร์" in msg and "cookie" not in msg.lower()
     e = ingest.IngestError("x", "abc" * 500)
     assert len(e.detail) <= 600
+
+
+def _fake(monkeypatch):
+    monkeypatch.setenv("STYLEVAULT_YTDLP", f"{sys.executable}|{os.path.join(HERE, 'fake_ytdlp.py')}")
+
+
+def test_stuck_download_gives_up_with_easy_message(tmp_path, monkeypatch):
+    _fake(monkeypatch)
+    monkeypatch.setattr(ingest, "STALL_SEC", 2)
+    lib = L.Library(str(tmp_path / "lib"))
+    url = "https://www.tiktok.com/@x/video/HANGDL1"
+    cid = lib.create_clip("tiktok", "HANGDL1", "viral", url)
+    with pytest.raises(ingest.IngestError) as e:
+        ingest.download(lib, cid, url, Settings(), lambda *_: None)
+    assert "ค้างนานเกินไป" in str(e.value)
+
+
+def test_stuck_info_read_gives_up(tmp_path, monkeypatch):
+    _fake(monkeypatch)
+    monkeypatch.setattr(ingest, "INFO_SEC", 2)
+    with pytest.raises(ingest.IngestError) as e:
+        ingest.fetch_info("https://www.tiktok.com/@x/video/HANGINFO1", Settings())
+    assert "นานเกินไป" in str(e.value)
+
+
+def test_cancel_stops_a_running_download(tmp_path, monkeypatch):
+    import threading
+    import time
+    _fake(monkeypatch)
+    lib = L.Library(str(tmp_path / "lib"))
+    url = "https://www.tiktok.com/@x/video/HANGDL2"
+    cid = lib.create_clip("tiktok", "HANGDL2", "viral", url)
+    result = []
+
+    def work():
+        try:
+            ingest.download(lib, cid, url, Settings(), lambda *_: None)
+        except BaseException as e:           # noqa: BLE001
+            result.append(e)
+    t = threading.Thread(target=work)
+    t.start()
+    end = time.time() + 20
+    while cid not in ingest._procs and time.time() < end:
+        time.sleep(0.05)
+    time.sleep(0.5)
+    t0 = time.time()
+    ingest.cancel(cid)
+    t.join(15)
+    assert not t.is_alive() and time.time() - t0 < 10
+    assert result and isinstance(result[0], ingest.Cancelled)
+    ingest.clear_cancel(cid)
