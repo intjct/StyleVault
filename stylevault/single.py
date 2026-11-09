@@ -28,10 +28,10 @@ class Listener:
         self.server.newConnection.connect(self._conn)
         self.ok = self.server.listen(NAME)
 
-    def _ready(self):
-        self._on_show()
-
     def _conn(self):
+        """Any new connection means "a second copy was started": no need to wait for its data (on Windows the data
+        could be lost if the sender hangs up quickly)."""
         sock = self.server.nextPendingConnection()
         if sock:
-            sock.readyRead.connect(self._ready)              # the socket stays a child of the server: freed with it
+            sock.setParent(self.server)                  # freed together with the server
+        self._on_show()
