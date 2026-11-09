@@ -4,10 +4,11 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QLabel, QMenu, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget
 
 from .. import library as L
+from .. import tgbot
 from ..jobs import Jobs
 from ..settings import Settings
 from . import dialogs, theme
@@ -66,6 +67,18 @@ class MainWindow(QWidget):
         self.settings_page.speech_ready.connect(self._queue_extras)
         self.settings_page.library_changed.connect(self._library_changed)
 
+        # Telegram: links shared from the phone
+        self.tg = tgbot.Service()
+        self.tg.add_request.connect(self._tg_add)
+        self.tg.paired.connect(self._tg_paired)
+        self.tg.status.connect(self._tg_status)
+        self.settings_page.bind_telegram(self.tg)
+        self.settings_page.tg_changed.connect(self._refresh_tray)
+        self._tg_clips: dict[str, int] = {}                    # clip id -> chat to tell when it is done
+        self._quitting = False
+        self.tray: QSystemTrayIcon | None = None
+        self._setup_tray()
+
         self.drop_hint = QLabel("ปล่อยไฟล์วิดีโอที่นี่เพื่อเพิ่มเข้าคลัง", self)
         self.drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.drop_hint.setStyleSheet(
@@ -82,6 +95,137 @@ class MainWindow(QWidget):
         self._watch.start()
         if not os.environ.get("STYLEVAULT_NO_UPDATE_CHECK"):
             self.update_bar.check_later()
+        self.tg_start()
+
+    # ---- Telegram + tray
+    def tg_start(self):
+        if self.s.tg_token and self.s.tg_chat_id:
+            self.tg.configure(self.s.tg_token, self.s.tg_chat_id, self.s.tg_default_kind, start=not self.s.tg_paused)
+        self._refresh_tray()
+
+    def tg_connected(self) -> bool:
+        return bool(self.s.tg_token and self.s.tg_chat_id)
+
+    def _setup_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray = QSystemTrayIcon(theme.app_icon(), self)
+        menu = QMenu(self)
+        self._tray_head = QAction("คลังสไตล์", menu)
+        self._tray_head.setEnabled(False)
+        self._tray_open = QAction("เปิดหน้าต่าง", menu)
+        self._tray_open.triggered.connect(self.bring_front)
+        self._tray_pause = QAction("หยุดรับลิงก์ชั่วคราว", menu)
+        self._tray_pause.triggered.connect(self._tg_toggle_pause)
+        self._tray_quit = QAction("ออกจากโปรแกรม", menu)
+        self._tray_quit.triggered.connect(self.quit_app)
+        for a in (self._tray_head, self._tray_open, self._tray_pause):
+            menu.addAction(a)
+        menu.addSeparator()
+        menu.addAction(self._tray_quit)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(lambda r: self.bring_front() if r in (
+            QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+
+    STATUS_TH = {"ok": "Telegram เชื่อมอยู่ ✓", "connecting": "Telegram กำลังเชื่อม…", "offline": "Telegram ต่อเน็ตไม่ได้ (รอลองใหม่)",
+                 "conflict": "มีอีกเครื่องใช้บอทนี้อยู่", "badtoken": "รหัสบอทใช้ไม่ได้ — เชื่อมใหม่ในหน้าตั้งค่า",
+                 "paused": "Telegram หยุดรับลิงก์ชั่วคราว", "off": ""}
+
+    def _refresh_tray(self, *_):
+        if not self.tray:
+            return
+        on = self.tg_connected() and self.s.tray_on_close
+        self.tray.setVisible(on)
+        if not on:
+            return
+        st = self.STATUS_TH.get(self.tg.state, "")
+        self._tray_head.setText("คลังสไตล์" + (f" · {st}" if st else ""))
+        self._tray_pause.setText("เริ่มรับลิงก์อีกครั้ง" if self.s.tg_paused else "หยุดรับลิงก์ชั่วคราว")
+        self.tray.setToolTip("คลังสไตล์" + (f"\n{st}" if st else ""))
+
+    def _tg_status(self, _st: str):
+        self._refresh_tray()
+
+    def _tg_toggle_pause(self):
+        self.s.tg_paused = not self.s.tg_paused
+        self.s.save()
+        if self.s.tg_paused:
+            self.tg.pause()
+        else:
+            self.tg.configure(self.s.tg_token, self.s.tg_chat_id, self.s.tg_default_kind)
+        self._refresh_tray()
+
+    def _tg_paired(self, chat_id: int, _name: str):
+        self.s.tg_chat_id = int(chat_id)
+        self.s.tg_paused = False
+        self.s.save()
+        self._refresh_tray()
+
+    def _tg_add(self, urls: list, note: str, kind: str, chat_id: int):
+        """Links that arrived from the phone. Never opens a dialog (nobody may be at the PC)."""
+        added = 0
+        for raw in urls:
+            if not L.looks_like_url(raw):
+                continue
+            url = L.normalize_url(raw)
+            plat = L.platform_of(url) or "other"
+            sid = L.short_id_of(url, plat)
+            exist = self.lib.find_existing(plat, sid)
+            if exist:
+                self._tg_note(exist, note)
+                self.tg.send(chat_id, f"คลิปนี้มีในคลังแล้ว ({L.num_label(self.lib.meta(exist)) or exist}) ไม่ได้เพิ่มซ้ำ")
+                continue
+            cid = self.lib.create_clip(plat, sid, kind, url)
+            self._tg_note(cid, note)
+            self._tg_clips[cid] = chat_id
+            self.jobs.add_link(cid, url)
+            added += 1
+        if added:
+            self.tg.send(chat_id, "กำลังโหลดคลิปบนคอม…" if added == 1 else f"กำลังโหลด {added} คลิปบนคอม…")
+            self.library_page.refresh()
+        elif not any(L.looks_like_url(u) for u in urls):
+            self.tg.send(chat_id, "ลิงก์นี้อ่านไม่ได้ ลองคัดลอกลิงก์ของคลิปมาใหม่")
+
+    def _tg_note(self, clip_id: str, note: str):
+        if not note:
+            return
+        try:
+            with open(self.lib.notes_path(clip_id), "a", encoding="utf-8") as f:
+                f.write(f"ฝากจากมือถือ: {note}\n")
+        except OSError:
+            pass
+
+    def _tg_report(self, clip_id: str):
+        chat = self._tg_clips.get(clip_id)
+        if chat is None or self.jobs.is_active(clip_id):
+            return
+        m = self.lib.meta(clip_id) or {}
+        num = L.num_label(m) or "คลิป"
+        if m.get("status") == "error":
+            self.tg.send(chat, f"โหลด {num} ไม่ได้ ⚠️\n{m.get('error') or 'เกิดข้อผิดพลาด'}")
+        elif m.get("status") in ("waiting", "analyzed"):
+            title = (m.get("title") or "").strip().replace("\n", " ")[:60]
+            self.tg.send(chat, f"✓ {num} เข้าคลังแล้ว" + (f"\n{title}" if title else "") + "\nรอให้ Claude วิเคราะห์ได้เลย")
+        else:
+            return
+        self._tg_clips.pop(clip_id, None)
+
+    def bring_front(self):
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_app(self):
+        self._quitting = True
+        self.tg.stop()
+        if self.tray:
+            self.tray.hide()
+        self.close()
+
+    def hides_on_close(self) -> bool:
+        return bool(self.tray and self.tray.isVisible() and self.tg_connected() and self.s.tray_on_close
+                    and not self.s.tg_paused and not self._quitting)
 
     def _signature(self) -> dict:
         """Modified-times of the files Claude (or the program) changes, per clip."""
@@ -250,6 +394,7 @@ class MainWindow(QWidget):
 
     # ---- jobs
     def _job_changed(self, clip_id: str):
+        self._tg_report(clip_id)
         self.library_page.refresh()
         if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
             self.detail.show_clip(self.lib, clip_id)
@@ -336,4 +481,17 @@ class MainWindow(QWidget):
 
     def closeEvent(self, e):
         self.detail.leave()
+        if self.hides_on_close():
+            e.ignore()                                     # keep running in the tray so the bot can still take links
+            self.hide()
+            if not self.s.tray_hint_shown:
+                self.s.tray_hint_shown = True
+                self.s.save()
+                self.tray.showMessage("คลังสไตล์ยังทำงานอยู่", "รับลิงก์จากมือถือต่อที่ไอคอนข้างนาฬิกา "
+                                      "ถ้าจะปิดจริงให้คลิกขวาที่ไอคอน แล้วเลือก \"ออกจากโปรแกรม\"",
+                                      QSystemTrayIcon.MessageIcon.Information, 8000)
+            return
+        self.tg.stop()
         super().closeEvent(e)
+        if not QApplication.quitOnLastWindowClosed():
+            QApplication.quit()

@@ -5,12 +5,12 @@ import threading
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from .. import VERSION, tools, transcribe
+from .. import VERSION, autostart, tools, transcribe
 from ..settings import Settings
-from . import theme
+from . import dialogs, theme
 
 COPYRIGHT_TH = "คลิปในคลังใช้เพื่อศึกษาเท่านั้น ห้ามนำไปโพสต์ซ้ำ"
 
@@ -25,6 +25,7 @@ class SettingsPage(QWidget):
     back = Signal()
     library_changed = Signal(str)
     speech_ready = Signal()
+    tg_changed = Signal()
 
     def __init__(self, settings: Settings):
         super().__init__()
@@ -122,6 +123,8 @@ class SettingsPage(QWidget):
         root.addWidget(self.speech_msg)
         root.addWidget(self._sep())
 
+        self._build_telegram(root)
+
         # browser login
         root.addWidget(self._h("คลิปที่ต้องล็อกอิน (Instagram / Facebook)"))
         self.login_cb = QCheckBox("ใช้การล็อกอินจากเบราว์เซอร์ในเครื่องนี้")
@@ -165,6 +168,222 @@ class SettingsPage(QWidget):
         self.update_bar = None
         root.addStretch(1)
 
+    # ---- Telegram (links from the phone)
+    TG_STATUS = {"ok": "พร้อมรับลิงก์ ✓", "connecting": "กำลังเชื่อม…", "offline": "ต่ออินเทอร์เน็ตไม่ได้ — จะลองใหม่เอง",
+                 "conflict": "มีโปรแกรมอื่นใช้บอทนี้อยู่ — ปิดอันอื่นก่อน", "badtoken": "รหัสบอทใช้ไม่ได้แล้ว — กดยกเลิกการเชื่อมแล้วเชื่อมใหม่",
+                 "paused": "หยุดรับลิงก์ชั่วคราว (เปิดใหม่ได้จากไอคอนข้างนาฬิกา)", "off": ""}
+
+    def _build_telegram(self, root):
+        self.tg = None
+        self._tg_verifying = False
+        root.addWidget(self._h("ส่งลิงก์จากมือถือ (Telegram)"))
+        intro = QLabel("แชร์ลิงก์คลิปจากมือถือเข้าบอท Telegram ของคุณเอง แล้วโปรแกรมนี้จะโหลดเข้าคลังให้ "
+                       "ส่งแค่ลิงก์ ไม่มีไฟล์ของคุณขึ้นอินเทอร์เน็ต และรับจากบัญชี Telegram ของคุณคนเดียว")
+        intro.setObjectName("Soft")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        # not connected yet: the 3-step wizard
+        self.tg_wizard = QWidget()
+        w = QVBoxLayout(self.tg_wizard)
+        w.setContentsMargins(0, 0, 0, 0)
+        w.setSpacing(8)
+        for t in ("1. เปิด Telegram ค้นหา @BotFather แล้วพิมพ์ /newbot ตั้งชื่อบอทตามใจชอบ",
+                  "2. BotFather จะส่ง \"รหัสบอท\" ยาวๆ มาให้ คัดลอกมาวางด้านล่าง"):
+            l = QLabel(t)
+            l.setWordWrap(True)
+            w.addWidget(l)
+        self.tg_token_edit = QLineEdit()
+        self.tg_token_edit.setPlaceholderText("วางรหัสบอทที่นี่ เช่น 123456789:AAH…")
+        self.tg_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        w.addWidget(self.tg_token_edit)
+        self.tg_check_btn = QPushButton("ตรวจรหัสบอท")
+        self.tg_check_btn.setObjectName("Primary")
+        self.tg_check_btn.clicked.connect(self._tg_check)
+        w.addWidget(self.tg_check_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.tg_result = QLabel("")
+        self.tg_result.setWordWrap(True)
+        self.tg_result.hide()
+        w.addWidget(self.tg_result)
+        self.tg_step3 = QWidget()
+        s3 = QVBoxLayout(self.tg_step3)
+        s3.setContentsMargins(0, 0, 0, 0)
+        s3.setSpacing(6)
+        l3 = QLabel("3. เปิดแชตกับบอทตัวนี้ในมือถือ แล้วพิมพ์รหัสยืนยันนี้ส่งไป:")
+        l3.setWordWrap(True)
+        s3.addWidget(l3)
+        self.tg_code = QLabel("")
+        self.tg_code.setStyleSheet(f"font-size: 26px; font-weight: 500; letter-spacing: 6px; color: {theme.ACCENT.name()};")
+        s3.addWidget(self.tg_code)
+        self.tg_wait = QLabel("โปรแกรมกำลังรอรหัสนี้อยู่ พอเชื่อมสำเร็จหน้านี้จะเปลี่ยนเอง")
+        self.tg_wait.setObjectName("Soft")
+        self.tg_wait.setWordWrap(True)
+        s3.addWidget(self.tg_wait)
+        self.tg_newcode = QPushButton("สร้างรหัสใหม่")
+        self.tg_newcode.clicked.connect(self._tg_new_code)
+        self.tg_newcode.hide()
+        s3.addWidget(self.tg_newcode, 0, Qt.AlignmentFlag.AlignLeft)
+        self.tg_step3.hide()
+        w.addWidget(self.tg_step3)
+        root.addWidget(self.tg_wizard)
+
+        # connected
+        self.tg_done = QWidget()
+        d = QVBoxLayout(self.tg_done)
+        d.setContentsMargins(0, 0, 0, 0)
+        d.setSpacing(8)
+        self.tg_status = QLabel("")
+        self.tg_status.setObjectName("Good")
+        self.tg_status.setWordWrap(True)
+        d.addWidget(self.tg_status)
+        self.tg_auto_cb = QCheckBox("เปิดโปรแกรมเองตอนเปิดคอม")
+        self.tg_auto_cb.toggled.connect(self._tg_autostart)
+        d.addWidget(self.tg_auto_cb)
+        self.tg_tray_cb = QCheckBox("ปิดหน้าต่างแล้วให้ทำงานต่อที่ไอคอนข้างนาฬิกา")
+        self.tg_tray_cb.toggled.connect(self._tg_tray)
+        d.addWidget(self.tg_tray_cb)
+        krow = QHBoxLayout()
+        kl = QLabel("ถ้าไม่กดเลือกประเภทคลิปในมือถือ ให้ใช้")
+        kl.setObjectName("Soft")
+        self.tg_kind = QComboBox()
+        self.tg_kind.addItem("คลิปไวรัล", "viral")
+        self.tg_kind.addItem("สไตล์เอฟเฟกต์", "effects")
+        self.tg_kind.currentIndexChanged.connect(self._tg_kind)
+        krow.addWidget(kl)
+        krow.addWidget(self.tg_kind)
+        krow.addStretch(1)
+        d.addLayout(krow)
+        self.tg_warn = QLabel("ถ้าปิดโปรแกรมจริงๆ (คลิกขวาที่ไอคอน → ออกจากโปรแกรม) บอทจะรับลิงก์ไม่ได้ "
+                              "Telegram เก็บลิงก์ไว้ให้ 24 ชั่วโมง เปิดโปรแกรมใหม่แล้วจะเข้าคลังเอง")
+        self.tg_warn.setObjectName("Warn")
+        self.tg_warn.setWordWrap(True)
+        d.addWidget(self.tg_warn)
+        self.tg_off_btn = QPushButton("ยกเลิกการเชื่อม")
+        self.tg_off_btn.clicked.connect(self._tg_disconnect)
+        d.addWidget(self.tg_off_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(self.tg_done)
+        root.addWidget(self._sep())
+
+    def bind_telegram(self, service):
+        self.tg = service
+        service.verified.connect(self._tg_verified)
+        service.paired.connect(self._tg_paired)
+        service.pair_locked.connect(self._tg_locked)
+        service.status.connect(self._tg_state)
+
+    def _tg_render(self):
+        connected = bool(self.s.tg_token and self.s.tg_chat_id)
+        self.tg_done.setVisible(connected)
+        self.tg_wizard.setVisible(not connected)
+        if connected:
+            self._tg_state(self.tg.state if self.tg else "off")
+            for cb, val in ((self.tg_auto_cb, self.s.autostart and autostart.is_enabled()), (self.tg_tray_cb, self.s.tray_on_close)):
+                cb.blockSignals(True)
+                cb.setChecked(bool(val))
+                cb.blockSignals(False)
+            self.tg_kind.blockSignals(True)
+            self.tg_kind.setCurrentIndex(0 if self.s.tg_default_kind != "effects" else 1)
+            self.tg_kind.blockSignals(False)
+        else:
+            code = self.tg.code if self.tg else None
+            self.tg_step3.setVisible(bool(code) or self.tg_newcode.isVisible())
+            if code:
+                self.tg_code.setText(code)
+
+    def _tg_state(self, st: str):
+        self.tg_status.setText("✓ เชื่อมแล้ว — " + self.TG_STATUS.get(st, ""))
+        self.tg_status.setObjectName("Good" if st in ("ok", "connecting") else "Warn")
+        self.tg_status.style().unpolish(self.tg_status)
+        self.tg_status.style().polish(self.tg_status)
+
+    def _tg_check(self):
+        token = self.tg_token_edit.text().strip()
+        if not token or not self.tg:
+            self._tg_msg("วางรหัสบอทก่อนนะ ได้มาจาก BotFather ในข้อ 2", good=False)
+            return
+        self._tg_verifying = True
+        self.tg_check_btn.setEnabled(False)
+        self._tg_msg("กำลังตรวจ…", good=True)
+        self.tg.verify(token)
+
+    def _tg_msg(self, text: str, good: bool):
+        self.tg_result.setText(text)
+        self.tg_result.setObjectName("Good" if good else "Warn")
+        self.tg_result.style().unpolish(self.tg_result)
+        self.tg_result.style().polish(self.tg_result)
+        self.tg_result.show()
+
+    def _tg_verified(self, ok: bool, msg: str):
+        if not self._tg_verifying:
+            return
+        self._tg_verifying = False
+        self.tg_check_btn.setEnabled(True)
+        if not ok:
+            self._tg_msg(msg, good=False)
+            return
+        self._tg_msg(f"✓ เจอบอทชื่อ {msg}", good=True)
+        self.s.tg_token = self.tg_token_edit.text().strip()
+        self.s.tg_chat_id = 0
+        self.s.save()
+        self.tg.configure(self.s.tg_token, 0, self.s.tg_default_kind, pairing=True)
+        self.tg_newcode.hide()
+        self.tg_wait.setText("โปรแกรมกำลังรอรหัสนี้อยู่ พอเชื่อมสำเร็จหน้านี้จะเปลี่ยนเอง")
+        self.tg_step3.show()
+        self.tg_code.setText(self.tg.code or "")
+
+    def _tg_new_code(self):
+        code = self.tg.new_pair_code() if self.tg else None
+        if code:
+            self.tg_code.setText(code)
+            self.tg_newcode.hide()
+            self.tg_wait.setText("โปรแกรมกำลังรอรหัสนี้อยู่ พอเชื่อมสำเร็จหน้านี้จะเปลี่ยนเอง")
+
+    def _tg_locked(self):
+        self.tg_code.setText("— — — —")
+        self.tg_wait.setText("รหัสถูกยกเลิก เพราะมีคนส่งรหัสผิดหลายครั้ง กดสร้างรหัสใหม่")
+        self.tg_newcode.show()
+
+    def _tg_paired(self, *_):
+        self.tg_token_edit.clear()
+        self.tg_result.hide()
+        self.tg_step3.hide()
+        self._tg_render()
+        self.tg_changed.emit()
+
+    def _tg_autostart(self, on: bool):
+        ok = autostart.set_enabled(on)
+        if on and not ok:
+            self.tg_auto_cb.blockSignals(True)
+            self.tg_auto_cb.setChecked(False)
+            self.tg_auto_cb.blockSignals(False)
+            dialogs.message(self, "ตั้งไม่ได้", "ตัวเลือกนี้ใช้ได้เฉพาะโปรแกรมที่ติดตั้งจากตัวติดตั้งแล้วเท่านั้น")
+            on = False
+        self.s.autostart = on
+        self.s.save()
+
+    def _tg_tray(self, on: bool):
+        self.s.tray_on_close = on
+        self.s.save()
+        self.tg_changed.emit()
+
+    def _tg_kind(self):
+        self.s.tg_default_kind = self.tg_kind.currentData()
+        self.s.save()
+        if self.tg:
+            self.tg.set_default_kind(self.s.tg_default_kind)
+
+    def _tg_disconnect(self):
+        if not dialogs.message(self, "ยกเลิกการเชื่อม Telegram?",
+                               "โปรแกรมจะเลิกรับลิงก์จากบอท (คลิปที่อยู่ในคลังไม่หาย) เชื่อมใหม่ได้ทุกเมื่อ",
+                               "ยกเลิกการเชื่อม", "ไม่ยกเลิก"):
+            return
+        if self.tg:
+            self.tg.disconnect()
+        self.s.tg_token, self.s.tg_chat_id, self.s.tg_paused = "", 0, False
+        self.s.save()
+        self._tg_render()
+        self.tg_changed.emit()
+
     def _h(self, text):
         l = QLabel(text)
         l.setObjectName("H2")
@@ -186,6 +405,7 @@ class SettingsPage(QWidget):
         self.browser.blockSignals(False)
         self._login_toggled(self.s.use_browser_login, save=False)
         self._speech_state()
+        self._tg_render()
 
     # ---- speech model
     def _speech_state(self):

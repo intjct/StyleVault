@@ -27,6 +27,13 @@ class Settings:
     browser: str = "chrome"              # chrome / edge
     first_run_done: bool = False
     volume: int = 50                     # clip player volume 0-100 (remembered)
+    tg_token: str = ""                   # Telegram bot token (kept only on this PC)
+    tg_chat_id: int = 0                  # the one chat the bot listens to (the owner's)
+    tg_paused: bool = False              # "หยุดรับลิงก์ชั่วคราว" from the tray menu
+    tg_default_kind: str = "viral"       # used when no button is pressed within 1 minute
+    tray_on_close: bool = True           # closing the window keeps the program running in the tray (only while Telegram is on)
+    autostart: bool = False              # start with Windows
+    tray_hint_shown: bool = False        # the "still running in the tray" balloon is shown only once
 
     def library_path(self) -> str:
         return self.library_dir or default_library_dir()
