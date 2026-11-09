@@ -236,6 +236,10 @@ class SettingsPage(QWidget):
         self.tg_status.setObjectName("Good")
         self.tg_status.setWordWrap(True)
         d.addWidget(self.tg_status)
+        self.tg_event = QLabel("")
+        self.tg_event.setObjectName("Soft")
+        self.tg_event.setWordWrap(True)
+        d.addWidget(self.tg_event)
         self.tg_auto_cb = QCheckBox("เปิดโปรแกรมเองตอนเปิดคอม")
         self.tg_auto_cb.toggled.connect(self._tg_autostart)
         d.addWidget(self.tg_auto_cb)
@@ -270,6 +274,7 @@ class SettingsPage(QWidget):
         service.paired.connect(self._tg_paired)
         service.pair_locked.connect(self._tg_locked)
         service.status.connect(self._tg_state)
+        service.event.connect(lambda t: self.tg_event.setText("ข้อความล่าสุดที่บอทได้รับ: " + t))
 
     def _tg_render(self):
         connected = bool(self.s.tg_token and self.s.tg_chat_id)
@@ -277,6 +282,9 @@ class SettingsPage(QWidget):
         self.tg_wizard.setVisible(not connected)
         if connected:
             self._tg_state(self.tg.state if self.tg else "off")
+            last = self.tg.last_event if self.tg else ""
+            self.tg_event.setText(("ข้อความล่าสุดที่บอทได้รับ: " + last) if last else
+                                  "ยังไม่มีข้อความเข้ามา — ลองส่งลิงก์เข้าบอท แล้วดูบรรทัดนี้เปลี่ยน")
             for cb, val in ((self.tg_auto_cb, self.s.autostart and autostart.is_enabled()), (self.tg_tray_cb, self.s.tray_on_close)):
                 cb.blockSignals(True)
                 cb.setChecked(bool(val))

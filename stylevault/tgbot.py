@@ -123,6 +123,7 @@ class Bot:
         self.on_add = lambda urls, note, kind, chat_id: None
         self.on_paired = lambda chat_id, name: None
         self.on_pair_locked = lambda: None
+        self.on_event = lambda text: None          # one easy-Thai line about what just happened (shown in Settings)
 
     # ---- sending
     def say(self, chat_id: int, text: str, markup: dict | None = None) -> int | None:
@@ -132,7 +133,8 @@ class Bot:
         try:
             res = self.api.call("sendMessage", params, timeout=20)
             return (res or {}).get("message_id")
-        except TgError:
+        except TgError as e:
+            self.on_event(f"ตอบกลับในแชตไม่ได้ ({e}{' / ' + e.detail[:80] if e.detail else ''})")
             return None
 
     def _edit(self, chat_id: int, message_id: int | None, text: str):
@@ -153,6 +155,8 @@ class Bot:
                 self.handle(u)
             except TgError:
                 pass
+            except Exception as e:                      # one odd message must not stop the bot or vanish silently
+                self.on_event(f"อ่านข้อความไม่ได้ ({type(e).__name__}: {str(e)[:80]})")
         return len(updates or [])
 
     def handle(self, u: dict, now: float | None = None):
@@ -165,10 +169,13 @@ class Bot:
             return
         chat = m.get("chat") or {}
         if chat.get("type") != "private":
+            self.on_event("ได้รับข้อความจากกลุ่ม/ช่อง (ไม่รับ รับเฉพาะแชตส่วนตัว)")
             return
         cid = int(chat.get("id", 0))
         text = (m.get("text") or m.get("caption") or "").strip()
         if not self.chat_id or cid != self.chat_id:
+            self.on_event("ได้รับข้อความจากบัญชี Telegram ที่ไม่ใช่บัญชีที่เชื่อมไว้ (ไม่รับ)" if self.chat_id
+                          else "ได้รับข้อความ แต่ยังไม่ได้เชื่อมบัญชี")
             self._maybe_pair(cid, m, text)
             return
         if text.startswith("/start") or text.startswith("/help"):
@@ -176,6 +183,8 @@ class Bot:
                           "จะพิมพ์โน้ตต่อท้ายลิงก์ด้วยก็ได้ โน้ตจะไปอยู่ในคลิปนั้น")
             return
         urls, note = extract(text)
+        self.on_event(f"ได้รับข้อความจากบัญชีที่เชื่อม — เจอลิงก์ {len(urls)} อัน" if urls
+                      else "ได้รับข้อความจากบัญชีที่เชื่อม — ไม่เจอลิงก์ในข้อความ")
         if not urls:
             self.say(cid, "ยังไม่เจอลิงก์ในข้อความนี้ — ส่งลิงก์คลิปมาได้เลยครับ")
             return
@@ -217,6 +226,7 @@ class Bot:
         except ValueError:
             return
         item = self.pending.pop(key, None)
+        self.on_event("กดเลือกประเภทแล้ว" if item else "กดปุ่มที่หมดเวลาแล้ว")
         try:
             self.api.call("answerCallbackQuery", {"callback_query_id": q.get("id"),
                                                   "text": "รับทราบ" if item else "หมดเวลาแล้ว"}, timeout=20)
@@ -247,6 +257,7 @@ class Service(QObject):
     pair_locked = Signal()
     add_request = Signal(list, str, str, int)  # urls, note, kind, chat id
     verified = Signal(bool, str)              # ok, bot name or easy-Thai message
+    event = Signal(str)                       # what the bot just did, for the Settings page
 
     def __init__(self, transport=None):
         super().__init__()
@@ -256,6 +267,7 @@ class Service(QObject):
         self._thread: threading.Thread | None = None
         self.state = "off"
         self.last_error = ""
+        self.last_event = ""
         self.token = ""
         self.code: str | None = None
 
@@ -295,6 +307,7 @@ class Service(QObject):
         bot = Bot(Api(self.token, self._transport), chat_id, default_kind, self.code)
         bot.on_add = lambda urls, note, kind, cid: self.add_request.emit(urls, note, kind, cid)
         bot.on_paired = self._on_paired
+        bot.on_event = self._on_event
         bot.on_pair_locked = lambda: (setattr(self, "code", None), self.pair_locked.emit())
         self._bot = bot
         self._stop = threading.Event()
@@ -339,6 +352,11 @@ class Service(QObject):
             except TgError:
                 pass
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_event(self, text: str):
+        import time as _t
+        self.last_event = f"{_t.strftime('%H:%M:%S')} {text}"
+        self.event.emit(self.last_event)
 
     def _on_paired(self, chat_id: int, name: str):
         self.code = None

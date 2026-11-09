@@ -272,3 +272,40 @@ def test_ssl_context_has_mozilla_roots_and_still_verifies():
     assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
     assert len(ctx.get_ca_certs()) > 100
     assert tgbot.Api("T")._ctx is not None
+
+
+def test_bot_reports_what_it_saw_even_when_silent():
+    bot, t, got = make_bot(chat=1)
+    ev = []
+    bot.on_event = ev.append
+    bot.handle(msg("https://vt.tiktok.com/ZS1/", chat=999))
+    assert "ไม่ใช่บัญชีที่เชื่อม" in ev[-1]
+    bot.handle(msg("hello", chat=1))
+    assert "ไม่เจอลิงก์" in ev[-1]
+    bot.handle(msg("https://vt.tiktok.com/ZS1/", chat=1, uid=5))
+    assert "เจอลิงก์ 1" in ev[-1]
+    t.fail = {"ok": False, "error_code": 400, "description": "Bad Request: chat not found"}
+    bot.say(1, "x")
+    assert "ตอบกลับในแชตไม่ได้" in ev[-1] and "chat not found" in ev[-1]
+
+
+def test_odd_message_does_not_vanish_silently():
+    bot, t, got = make_bot(chat=1)
+    ev = []
+    bot.on_event = ev.append
+    t.updates = [{"update_id": 3, "message": {"message_id": 3, "chat": {"id": "oops", "type": "private"}, "text": "x"}}]
+    assert bot.poll(timeout=1) == 1 and bot.offset == 4
+    assert any("อ่านข้อความไม่ได้" in e for e in ev)
+
+
+def test_after_restart_the_saved_bot_answers_a_link(app, tmp_path):
+    """The path the user hits every day: settings already hold token + chat, the program starts, a link arrives."""
+    w = make_window(tmp_path, tg_token="123:ABC", tg_chat_id=42)
+    w.tg.stop()
+    fake = FakeTelegram()
+    w.tg._transport = fake
+    w.tg_start()
+    fake.updates = [msg("https://vt.tiktok.com/ZSpU9CFWE/", chat=42, uid=1)]
+    assert wait_until(app, lambda: any("คลิปนี้เป็นแบบไหน" in s for s in fake.sent()), 20)
+    assert wait_until(app, lambda: "ได้รับข้อความจากบัญชีที่เชื่อม" in w.tg.last_event, 5)
+    w.tg.stop()
