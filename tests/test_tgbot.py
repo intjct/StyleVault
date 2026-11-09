@@ -240,3 +240,27 @@ def test_second_copy_asks_first_to_show(app):
     assert single.notify_existing() is True
     assert wait_until(app, lambda: shown, 5)
     lst.server.close()
+
+
+def test_network_failures_explain_themselves():
+    import socket
+    import urllib.error
+    def boom(exc):
+        def tr(url, payload, timeout):
+            raise exc
+        return tr
+    # the real transport turns urllib errors into easy-Thai TgErrors
+    api = tgbot.Api("T")
+    import unittest.mock as mock
+    with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))):
+        with pytest.raises(tgbot.TgError) as e:
+            api.call("getMe")
+    assert e.value.kind == "net" and "บล็อก" in str(e.value) and "gaierror" in e.value.detail or "URLError" in e.value.detail
+    with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        with pytest.raises(tgbot.TgError) as e:
+            api.call("getMe")
+    assert "หมดเวลา" in str(e.value)
+    with mock.patch("urllib.request.urlopen", side_effect=ValueError("URL can't contain control characters")):
+        with pytest.raises(tgbot.TgError) as e:
+            api.call("getMe")
+    assert e.value.kind == "auth"

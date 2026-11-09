@@ -22,9 +22,25 @@ KIND_TH = {"effects": "สไตล์เอฟเฟกต์", "viral": "ค�
 
 
 class TgError(Exception):
-    def __init__(self, kind: str, message: str = ""):
+    def __init__(self, kind: str, message: str = "", detail: str = ""):
         super().__init__(message or kind)
         self.kind = kind            # auth / conflict / net / other
+        self.detail = detail        # raw reason, for tech support
+
+
+def net_message(e: BaseException) -> str:
+    """Easy-Thai reason for a network failure."""
+    import socket
+    import ssl
+    r = getattr(e, "reason", e)
+    if isinstance(r, ssl.SSLError) or "CERTIFICATE" in str(r).upper():
+        return ("เครื่องนี้ไม่ไว้ใจใบรับรองความปลอดภัยของ Telegram — มักเกิดจากโปรแกรมแอนตี้ไวรัส VPN หรือเวลาในเครื่องไม่ตรง "
+                "ลองปิดโปรแกรมพวกนี้ชั่วคราวแล้วกดตรวจใหม่")
+    if isinstance(r, (socket.timeout, TimeoutError)) or "timed out" in str(r).lower():
+        return "เข้า Telegram ไม่ทัน (หมดเวลา) — เน็ตอาจช้า หรือเครือข่ายนี้บล็อก Telegram ลองเปลี่ยนไปใช้เน็ตอื่น (เช่น ฮอตสปอตมือถือ) แล้วกดตรวจใหม่"
+    if isinstance(r, socket.gaierror) or "getaddrinfo" in str(r).lower():
+        return "หาที่อยู่ของ Telegram ไม่เจอ — เน็ตอาจหลุด หรือเครือข่ายนี้บล็อก Telegram ลองเปลี่ยนเน็ตหรือปิด VPN แล้วกดตรวจใหม่"
+    return "เชื่อมต่อ Telegram ไม่ได้ — ตรวจว่าเน็ตใช้ได้ ปิด VPN หรือโปรแกรมแอนตี้ไวรัสชั่วคราว แล้วกดตรวจใหม่"
 
 
 def extract(text: str) -> tuple[list[str], str]:
@@ -61,7 +77,9 @@ class Api:
                 body = {"ok": False, "error_code": e.code, "description": str(e)}
             return body
         except (urllib.error.URLError, OSError, TimeoutError) as e:
-            raise TgError("net", "เชื่อมต่ออินเทอร์เน็ตไม่ได้") from e
+            raise TgError("net", net_message(e), detail=f"{type(e).__name__}: {e}") from e
+        except ValueError as e:                          # a pasted token with strange characters makes an invalid address
+            raise TgError("auth", "รหัสบอทใช้ไม่ได้", detail=str(e)) from e
 
     def call(self, method: str, params: dict | None = None, timeout: float = 30) -> object:
         data = self._transport(f"https://api.telegram.org/bot{self.token}/{method}", params or {}, timeout)
@@ -222,6 +240,7 @@ class Service(QObject):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.state = "off"
+        self.last_error = ""
         self.token = ""
         self.code: str | None = None
 
@@ -242,6 +261,8 @@ class Service(QObject):
                 self.verified.emit(True, f"{(me or {}).get('first_name', 'บอท')} (@{(me or {}).get('username', '')})")
             except TgError as e:
                 msg = "รหัสบอทไม่ถูกต้อง ตรวจว่าคัดลอกมาครบทั้งหมด" if e.kind == "auth" else str(e)
+                if e.detail:
+                    msg += f"\n(รายละเอียดสำหรับช่างเทคนิค: {e.detail[:200]})"
                 self.verified.emit(False, msg)
         threading.Thread(target=work, daemon=True).start()
 
@@ -330,6 +351,7 @@ class Service(QObject):
                 if e.kind == "auth":
                     set_("badtoken")
                     return
+                self.last_error = e.detail
                 set_("conflict" if e.kind == "conflict" else "offline")
                 stop.wait(8 if e.kind == "conflict" else 10)
             except Exception:
