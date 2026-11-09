@@ -57,7 +57,48 @@ def validate(card) -> list[str]:
     for k in ("fps", "shot_frames"):
         if rec.get(k) is not None and not _is_num(rec[k]):
             bad.append(f"remotion_recipe.{k} must be a number")
+    bad += _validate_script(card.get("script"))
     return bad
+
+
+def _validate_script(sc) -> list[str]:
+    """`script` is optional (a clip without speech has none). Wrong shape = reported, never a crash."""
+    if sc is None:
+        return []
+    if not isinstance(sc, dict):
+        return ["script must be an object"]
+    bad: list[str] = []
+    for k in ("hook_th", "hook_formula_th", "tone_th", "closing_th", "template_th", "language"):
+        if sc.get(k) is not None and not isinstance(sc[k], str):
+            bad.append(f"script.{k} must be text")
+    for k in ("transitions_th", "devices_th"):
+        if sc.get(k) is not None and not _str_list(sc[k]):
+            bad.append(f"script.{k} must be a list of text")
+    pace = sc.get("pace")
+    if pace is not None:
+        if not isinstance(pace, dict):
+            bad.append("script.pace must be an object")
+        else:
+            for k in ("chars_per_sec", "words_per_sec", "avg_line_chars", "avg_pause_sec"):
+                if pace.get(k) is not None and not _is_num(pace[k]):
+                    bad.append(f"script.pace.{k} must be a number")
+            if pace.get("pause_style_th") is not None and not isinstance(pace["pause_style_th"], str):
+                bad.append("script.pace.pause_style_th must be text")
+            ps = pace.get("pauses")
+            if ps is not None and not (isinstance(ps, list) and all(
+                    isinstance(x, dict) and _is_num(x.get("t")) and _is_num(x.get("sec")) for x in ps)):
+                bad.append("script.pace.pauses must be a list of {t, sec, role_th}")
+    lines = sc.get("lines")
+    if lines is not None and not (isinstance(lines, list) and all(
+            isinstance(x, dict) and _is_num(x.get("from")) and isinstance(x.get("text"), str) for x in lines)):
+        bad.append("script.lines must be a list of {from, to, text, role_th}")
+    return bad
+
+
+def has_script(card) -> bool:
+    """True when the card carries a usable script analysis."""
+    sc = card.get("script") if isinstance(card, dict) else None
+    return isinstance(sc, dict) and bool(sc.get("hook_th") or sc.get("template_th") or sc.get("lines"))
 
 
 TEXT_ANIM_TH = {"word-pop": "คำเด้งขึ้นทีละคำ", "line-slide-up": "ทั้งบรรทัดสไลด์ขึ้น", "typewriter": "พิมพ์ดีดทีละตัว"}

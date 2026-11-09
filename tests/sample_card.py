@@ -17,6 +17,14 @@ CARD = {
     "structure": [{"from": 0, "to": 3, "beat_th": "ฮุก: คำคมใหญ่เต็มจอ"}, {"from": 3, "to": 10, "beat_th": "เนื้อ: ประวัติ"}],
     "remotion_recipe": {"fps": 30, "shot_frames": 48, "text_anim": "word-pop | typewriter", "transition": "zoom-punch",
                         "sfx_rule_th": "ใส่เสียงวูบ 3 เฟรมก่อนทุกจุดตัด", "notes_th": "คำเน้นใช้สีม่วง"},
+    "script": {
+        "language": "th", "hook_th": "รู้ไหมว่าคนส่วนใหญ่ตัดต่อผิดตรงนี้", "hook_formula_th": "ตั้งคำถามว่าคนส่วนใหญ่ทำผิด แล้วเว้นสั้นๆ",
+        "pace": {"chars_per_sec": 9.4, "avg_line_chars": 18, "avg_pause_sec": 0.6, "pause_style_th": "เว้นสั้นก่อนเฉลย",
+                 "pauses": [{"t": 3.1, "sec": 0.7, "role_th": "เว้นก่อนเฉลย"}]},
+        "lines": [{"from": 0, "to": 3, "text": "รู้ไหมว่าคนส่วนใหญ่ตัดต่อผิดตรงนี้", "role_th": "ฮุก"}],
+        "transitions_th": ["แต่…", "ข้อสำคัญคือ…"], "closing_th": "ปิดด้วยชวนติดตาม", "tone_th": "เป็นกันเอง",
+        "devices_th": ["ถามแล้วตอบเอง"], "template_th": "ฮุก [คำถาม] → เว้น 0.5 วิ → เฉลย [คำตอบ] → ปิด [CTA]",
+    },
     "engky_fit_th": None,
     "limits_th": ["ชื่อฟอนต์จริงระบุไม่ได้"],
 }

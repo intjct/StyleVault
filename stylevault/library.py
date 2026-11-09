@@ -227,6 +227,7 @@ class Library:
 
     # ---- index for Claude
     def rebuild_index(self) -> None:
+        from . import stylecard
         items = []
         for m in self.list_meta():
             card = read_json(os.path.join(self.clip_dir(m["id"]), "style-card.json"))
@@ -236,6 +237,7 @@ class Library:
                 "status": m.get("status"), "view_count": m.get("view_count"),
                 "name_th": card.get("name_th"), "tags": card.get("tags") or [],
                 "summary_th": card.get("summary_th"), "fit_for_th": card.get("fit_for_th") or [],
+                "has_script": stylecard.has_script(card),
             })
         self.write_readme()
         with _lock:

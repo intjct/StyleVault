@@ -485,7 +485,7 @@ def test_settings_offers_the_better_speech_model(app, tmp_path, monkeypatch):
     w.open_settings()
     sp = w.settings_page
     assert "รุ่นใหม่" in sp.speech_lbl.text() and sp.speech_btn.text() == "ดาวน์โหลดตัวถอดรุ่นใหม่"
-    assert "570 MB" in " ".join(l.text() for l in sp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
+    assert "870 MB" in " ".join(l.text() for l in sp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
 
 
 # ---------------------------------------------------------------- v0.6.0: clip numbers
@@ -519,3 +519,38 @@ def test_clip_numbers_show_everywhere_and_search_by_number(app, tmp_path):
     # Claude's guide and index know about the numbers
     guide = open(os.path.join(w.lib.root, "CLAUDE-README.md"), encoding="utf-8").read()
     assert "`number`" in guide and "#4" in guide
+
+
+# ---------------------------------------------------------------- v0.7.0: script analysis
+def test_detail_shows_script_panel_and_copies_template(app, tmp_path):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QLabel, QPushButton
+    from sample_card import CARD
+    w = make_window(tmp_path)
+    cid = analyzed_clip(w, tmp_path)
+    L.write_json(os.path.join(w.lib.clip_dir(cid), "style-card.json"), CARD)
+    w.lib.update_meta(cid, status="analyzed")
+    w.open_clip(cid)
+    texts = " ".join(l.text() for l in w.detail.findChildren(QLabel))
+    for need in ("สคริปต์ (วิธีพูดของคลิปนี้)", "รู้ไหมว่าคนส่วนใหญ่ตัดต่อผิดตรงนี้", "9.4 ตัวอักษรต่อวินาที", "เว้นเฉลี่ย 0.6 วินาที",
+                 "ปิดด้วยชวนติดตาม", "เว้นที่ 3.1 วินาที"):
+        assert need in texts, need
+    btn = next(b for b in w.detail.findChildren(QPushButton) if b.text() == "คัดลอกแม่แบบสคริปต์")
+    btn.click()
+    assert QGuiApplication.clipboard().text() == CARD["script"]["template_th"]
+
+
+def test_script_filter_chip_lists_only_clips_with_a_script(app, tmp_path):
+    from sample_card import CARD, card
+    w = make_window(tmp_path)
+    a = analyzed_clip(w, tmp_path, "a")
+    b = analyzed_clip(w, tmp_path, "b")
+    L.write_json(os.path.join(w.lib.clip_dir(a), "style-card.json"), CARD)
+    L.write_json(os.path.join(w.lib.clip_dir(b), "style-card.json"), card(script=None))
+    for c in (a, b):
+        w.lib.update_meta(c, status="analyzed")
+    p = w.library_page
+    p.refresh()
+    assert p.chip["script"][0].text() == "มีสคริปต์ 1"
+    p._set_filter("script")
+    assert [c.clip_id for c in p.grid.cards] == [a]

@@ -160,3 +160,30 @@ def test_upgrade_from_the_old_small_model(tmp_path, fake_tools, monkeypatch):
     transcribe.download_model(lambda f, t: None)
     assert transcribe.model_ready() and not transcribe.old_model_present()
     assert os.listdir(models) == [transcribe.MODEL_NAME]
+
+
+def test_speech_stats_measure_rhythm():
+    d = transcribe.parse({"result": {"language": "th"}, "transcription": [
+        {"offsets": {"from": 0, "to": 2000}, "text": "สวัสดีครับ"},          # 10 characters in 2.0 s
+        {"offsets": {"from": 2600, "to": 4000}, "text": "วันนี้ มาดู"},       # 10 characters (space ignored) in 1.4 s, 0.6 s pause before
+        {"offsets": {"from": 4100, "to": 5000}, "text": "ครับ"}]})            # gap 0.1 s is not a pause
+    st = d["stats"]
+    assert st["chars"] == 24 and st["line_count"] == 3 and st["pause_count"] == 1
+    assert st["pauses"] == [{"t": 2.0, "sec": 0.6}] and st["avg_pause_sec"] == 0.6
+    assert st["first_word_at"] == 0.0 and st["last_word_at"] == 5.0
+    assert round(st["chars_per_sec"], 2) == round(24 / 4.3, 2)
+    assert transcribe.parse({})["stats"] is None
+
+
+def test_typhoon_model_replaces_both_older_models():
+    assert "typhoon" in transcribe.MODEL_NAME and transcribe.MODEL_LABEL == "typhoon-whisper-turbo"
+    assert {"ggml-small.bin", "ggml-large-v3-turbo-q5_0.bin"} <= set(transcribe.OLD_MODELS)
+    assert transcribe.needs_redo({"model": "whisper large-v3-turbo", "segments": []})      # made by 0.5.2 -> redone
+
+
+def test_speech_stats_count_words_for_languages_with_spaces():
+    d = transcribe.parse({"result": {"language": "en"}, "transcription": [
+        {"offsets": {"from": 0, "to": 2000}, "text": "This is a test"}, {"offsets": {"from": 2000, "to": 4000}, "text": "of the speed"}]})
+    assert d["stats"]["words"] == 7 and d["stats"]["words_per_sec"] == 1.75
+    assert "words" not in transcribe.parse({"result": {"language": "th"}, "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "สวัสดี"}]})["stats"]

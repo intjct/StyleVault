@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
+from .. import stylecard
 from ..library import Library, num_label
 from . import theme
 from .cards import Card, CardGrid
@@ -55,7 +56,8 @@ class LibraryPage(QWidget):
         self.group.setExclusive(True)
         self.chip = {}
         for key, name, obj in (("all", "ทั้งหมด", "Chip"), ("effects", "สไตล์เอฟเฟกต์", "Chip"),
-                               ("viral", "คลิปไวรัล", "Chip"), ("waiting", "รอวิเคราะห์", "ChipBlue")):
+                               ("viral", "คลิปไวรัล", "Chip"), ("script", "มีสคริปต์", "Chip"),
+                               ("waiting", "รอวิเคราะห์", "ChipBlue")):
             b = QPushButton(name)
             b.setObjectName(obj)
             b.setCheckable(True)
@@ -160,6 +162,8 @@ class LibraryPage(QWidget):
             return False
         if k == "waiting" and m.get("status") not in ("waiting", "downloading", "preparing"):
             return False
+        if k == "script" and not stylecard.has_script(card):
+            return False
         if self.query.startswith("#"):                       # "#4" finds clip number 4 exactly
             return num_label(m).lower() == self.query
         if self.query:
@@ -173,9 +177,12 @@ class LibraryPage(QWidget):
             return
         metas = self.lib.list_meta()
         waiting = sum(1 for m in metas if m.get("status") in ("waiting", "downloading", "preparing"))
+        card_of = {m["id"]: (self.lib.style_card(m["id"]) if m.get("status") == "analyzed" else None) for m in metas}
+        n_script = sum(1 for c in card_of.values() if stylecard.has_script(c))
         for key, (b, name) in self.chip.items():
             n = {"all": len(metas), "effects": sum(1 for m in metas if m.get("kind") == "effects"),
-                 "viral": sum(1 for m in metas if m.get("kind") == "viral"), "waiting": waiting}[key]
+                 "viral": sum(1 for m in metas if m.get("kind") == "viral"), "waiting": waiting,
+                 "script": n_script}[key]
             b.setText(f"{name} {n}")
         self.copy_cmd.setVisible(any(m.get("status") == "waiting" and m.get("raw_ready") for m in metas))
         shown = []
@@ -183,7 +190,7 @@ class LibraryPage(QWidget):
         for m in metas:
             cid = m["id"]
             alive.add(cid)
-            card_data = self.lib.style_card(cid) if m.get("status") == "analyzed" else None
+            card_data = card_of[cid]
             c = self.cards.get(cid)
             if c is None:
                 c = Card(cid)

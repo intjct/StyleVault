@@ -591,6 +591,7 @@ class DetailPage(QWidget):
             w = self._panel("โครงเรื่อง", rows)
             if w:
                 self.extra_holder.addWidget(w)
+        self._fill_script(card)
         rec = card.get("remotion_recipe") or {}
         if rec:
             rows = []
@@ -612,6 +613,46 @@ class DetailPage(QWidget):
             l.setObjectName("Hint")
             l.setWordWrap(True)
             self.extra_holder.addWidget(l)
+
+    def _fill_script(self, card: dict):
+        """The "สคริปต์" panel: how this clip is spoken (hook, speed, pauses, closing) + a copyable template."""
+        sc = card.get("script")
+        if not SC.has_script(card):
+            return
+        rows: list[tuple[str, str]] = [("ฮุก", sc.get("hook_th") or ""), ("สูตรฮุก", sc.get("hook_formula_th") or "")]
+        pace = sc.get("pace") if isinstance(sc.get("pace"), dict) else {}
+        if pace.get("chars_per_sec"):
+            rows.append(("ความเร็วพูด", f"{pace['chars_per_sec']:g} ตัวอักษรต่อวินาที"
+                         + (f" (บรรทัดละประมาณ {pace['avg_line_chars']:g} ตัวอักษร)" if pace.get("avg_line_chars") else "")))
+        if pace.get("avg_pause_sec") or pace.get("pause_style_th"):
+            bits = [f"เว้นเฉลี่ย {pace['avg_pause_sec']:g} วินาที" if pace.get("avg_pause_sec") else "", pace.get("pause_style_th") or ""]
+            rows.append(("การเว้นวรรค", " · ".join(b for b in bits if b)))
+        for x in (pace.get("pauses") or [])[:6]:
+            if isinstance(x, dict) and x.get("role_th"):
+                rows.append((f"เว้นที่ {x['t']:g} วินาที", f"{x['sec']:g} วินาที — {x['role_th']}"))
+        rows.append(("คำเปลี่ยนประเด็น", " / ".join(sc.get("transitions_th") or [])))
+        rows.append(("การปิดคลิป", sc.get("closing_th") or ""))
+        rows.append(("น้ำเสียง", sc.get("tone_th") or ""))
+        rows.append(("เทคนิคการเขียน", "\n".join("• " + x for x in (sc.get("devices_th") or []))))
+        for x in (sc.get("lines") or [])[:12]:
+            if isinstance(x, dict) and isinstance(x.get("from"), (int, float)):
+                to = x.get("to") if isinstance(x.get("to"), (int, float)) else x["from"]
+                rows.append((f"{x['from']:g}–{to:g} วินาที" + (f" · {x['role_th']}" if x.get("role_th") else ""), x.get("text") or ""))
+        rows.append(("แม่แบบสคริปต์", sc.get("template_th") or ""))
+        w = self._panel("สคริปต์ (วิธีพูดของคลิปนี้)", rows)
+        if not w:
+            return
+        if sc.get("template_th"):
+            btn = QPushButton("คัดลอกแม่แบบสคริปต์")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            def copy(_=False, b=btn, text=sc["template_th"]):
+                QGuiApplication.clipboard().setText(text)
+                b.setText("คัดลอกแล้ว ✓")
+                QTimer.singleShot(2000, lambda: b.setText("คัดลอกแม่แบบสคริปต์"))
+            btn.clicked.connect(copy)
+            w.layout().addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.extra_holder.addWidget(w)
 
     def _fill_speech(self, m: dict):
         from .. import transcribe

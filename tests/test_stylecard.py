@@ -32,3 +32,23 @@ def test_library_only_returns_valid_cards(tmp_path):
     assert lib.style_card(cid)["name_th"] == CARD["name_th"]
     L.write_json(path, card(tags=[]))
     assert lib.style_card(cid) is None
+
+
+def test_script_part_is_optional_and_checked():
+    assert SC.validate(card(script=None)) == []
+    assert SC.has_script(CARD) and not SC.has_script(card(script=None)) and not SC.has_script({})
+    for bad in (card(script="x"), card(script={"hook_th": 5}), card(script={"pace": {"chars_per_sec": "fast"}}),
+                card(script={"pace": {"pauses": [{"t": "a", "sec": 1}]}}), card(script={"lines": [{"from": 0}]}),
+                card(script={"transitions_th": "แต่"})):
+        assert SC.validate(bad), bad
+
+
+def test_index_tells_claude_which_clips_have_a_script(tmp_path):
+    lib = L.Library(str(tmp_path / "lib"))
+    a = lib.create_clip("tiktok", "1", "viral", "https://x")
+    b = lib.create_clip("tiktok", "2", "viral", "https://y")
+    L.write_json(os.path.join(lib.clip_dir(a), "style-card.json"), CARD)
+    L.write_json(os.path.join(lib.clip_dir(b), "style-card.json"), card(script=None))
+    lib.rebuild_index()
+    idx = {c["id"]: c for c in L.read_json(os.path.join(lib.root, "library-index.json"))["clips"]}
+    assert idx[a]["has_script"] is True and idx[b]["has_script"] is False
