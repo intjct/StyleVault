@@ -16,7 +16,8 @@ import urllib.request
 from PySide6.QtCore import QObject, Signal
 
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
-PENDING_SEC = 60            # no button pressed within this time -> use the default kind
+PENDING_SEC = 60
+LATE_SEC = 120                         # older than this = it was sent while the program was closed            # no button pressed within this time -> use the default kind
 MAX_WRONG_CODES = 5
 KIND_TH = {"effects": "สไตล์เอฟเฟกต์", "viral": "คลิปไวรัล"}
 
@@ -180,7 +181,9 @@ class Bot:
             return
         if text.startswith("/start") or text.startswith("/help"):
             self.say(cid, "สวัสดีครับ ส่งลิงก์คลิป (TikTok / Reels / Shorts / Facebook) มาได้เลย\n"
-                          "จะพิมพ์โน้ตต่อท้ายลิงก์ด้วยก็ได้ โน้ตจะไปอยู่ในคลิปนั้น")
+                          "จะพิมพ์โน้ตต่อท้ายลิงก์ด้วยก็ได้ โน้ตจะไปอยู่ในคลิปนั้น\n\n"
+                          "ถ้าคอมปิดอยู่ ลิงก์จะรออยู่ที่ Telegram ได้นานสุดประมาณ 24 ชั่วโมง "
+                          "พอเปิดโปรแกรมแล้วจะรับต่อเองและตอบกลับในแชตนี้")
             return
         urls, note = extract(text)
         self.on_event(f"ได้รับข้อความจากบัญชีที่เชื่อม — เจอลิงก์ {len(urls)} อัน" if urls
@@ -190,10 +193,14 @@ class Bot:
             return
         key = str(m.get("message_id"))
         label = "ลิงก์" if len(urls) == 1 else f"{len(urls)} ลิงก์"
+        late = ""
+        sent_at = m.get("date")
+        if sent_at and now - float(sent_at) > LATE_SEC:      # it waited at Telegram while the program was closed
+            late = f" (ฝากไว้ตั้งแต่ {time.strftime('%H:%M', time.localtime(float(sent_at)))} ตอนโปรแกรมปิดอยู่)"
         kb = {"inline_keyboard": [[
             {"text": "🎨 สไตล์เอฟเฟกต์", "callback_data": f"k|{key}|effects"},
             {"text": "🔥 คลิปไวรัล", "callback_data": f"k|{key}|viral"}]]}
-        mid = self.say(cid, f"รับ{label}แล้ว 🎬 คลิปนี้เป็นแบบไหน?\n"
+        mid = self.say(cid, f"รับ{label}แล้ว{late} 🎬 คลิปนี้เป็นแบบไหน?\n"
                             f"(ถ้าไม่กด จะใช้ \"{KIND_TH[self.default_kind]}\" ใน 1 นาที)", kb)
         self.pending[key] = {"urls": urls, "note": note, "chat": cid, "msg": mid, "due": now + PENDING_SEC}
 
@@ -352,6 +359,20 @@ class Service(QObject):
             except TgError:
                 pass
         threading.Thread(target=work, daemon=True).start()
+
+    def goodbye(self, chat_id: int, text: str, wait: float = 4.0):
+        """Tell the chat the program is closing. Waits a few seconds at most, then gives up quietly."""
+        if not self.token or not chat_id:
+            return
+        api = Api(self.token, self._transport)
+        def work():
+            try:
+                api.call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}, timeout=int(wait))
+            except Exception:
+                pass
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        t.join(wait)
 
     def _on_event(self, text: str):
         import time as _t

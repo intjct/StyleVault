@@ -217,8 +217,16 @@ class MainWindow(QWidget):
         self.raise_()
         self.activateWindow()
 
+    def _say_goodbye(self):
+        """One line to the phone chat so nobody wonders why the bot is quiet. Only while the bot is really on."""
+        if self.s.tg_notify_quit and self.s.tg_chat_id and self.tg.active and not self.s.tg_paused and not getattr(self, "_said_bye", False):
+            self._said_bye = True
+            self.tg.goodbye(self.s.tg_chat_id, "💤 ปิดโปรแกรมคลังสไตล์แล้ว ลิงก์ที่ส่งต่อจากนี้ผมจะยังไม่ตอบ "
+                                               "แต่ Telegram เก็บไว้ให้ได้ประมาณ 24 ชั่วโมง พอเปิดโปรแกรมจะรับต่อเอง")
+
     def quit_app(self):
         self._quitting = True
+        self._say_goodbye()
         self.tg.stop()
         if self.tray:
             self.tray.hide()
@@ -501,6 +509,7 @@ class MainWindow(QWidget):
                                       "ถ้าจะปิดจริงให้คลิกขวาที่ไอคอน แล้วเลือก \"ออกจากโปรแกรม\"",
                                       QSystemTrayIcon.MessageIcon.Information, 8000)
             return
+        self._say_goodbye()
         self.tg.stop()
         super().closeEvent(e)
         if not QApplication.quitOnLastWindowClosed():

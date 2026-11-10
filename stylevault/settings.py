@@ -31,6 +31,7 @@ class Settings:
     tg_chat_id: int = 0                  # the one chat the bot listens to (the owner's)
     tg_paused: bool = False              # "หยุดรับลิงก์ชั่วคราว" from the tray menu
     tg_default_kind: str = "viral"       # used when no button is pressed within 1 minute
+    tg_notify_quit: bool = True          # tell the phone chat when the program is closed
     tray_on_close: bool = True           # closing the window keeps the program running in the tray (only while Telegram is on)
     autostart: bool = False              # start with Windows
     tray_hint_shown: bool = False        # the "still running in the tray" balloon is shown only once

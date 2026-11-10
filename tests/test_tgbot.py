@@ -309,3 +309,48 @@ def test_after_restart_the_saved_bot_answers_a_link(app, tmp_path):
     assert wait_until(app, lambda: any("คลิปนี้เป็นแบบไหน" in s for s in fake.sent()), 20)
     assert wait_until(app, lambda: "ได้รับข้อความจากบัญชีที่เชื่อม" in w.tg.last_event, 5)
     w.tg.stop()
+
+
+def test_link_sent_while_program_was_closed_says_so():
+    bot, t, got = make_bot()
+    old = msg("https://vt.tiktok.com/ZSpU9CFWE/")
+    old["message"]["date"] = time.time() - 3 * 3600
+    bot.handle(old)
+    reply = t.sent()[-1]
+    assert "ตอนโปรแกรมปิดอยู่" in reply and "ฝากไว้ตั้งแต่" in reply
+    fresh = msg("https://vt.tiktok.com/ZSnew/", uid=2)
+    fresh["message"]["date"] = time.time() - 5
+    bot.handle(fresh)
+    assert "ตอนโปรแกรมปิดอยู่" not in t.sent()[-1]
+
+
+def test_start_message_explains_waiting_while_pc_is_off():
+    bot, t, _ = make_bot()
+    bot.handle(msg("/start"))
+    assert "24 ชั่วโมง" in t.sent()[-1]
+
+
+def test_quit_tells_the_phone_chat_once(app, tmp_path):
+    w = make_window(tmp_path, tg_token="123:ABC", tg_chat_id=42)
+    w.tg.stop()
+    fake = FakeTelegram()
+    w.tg._transport = fake
+    w.tg_start()
+    assert wait_until(app, lambda: w.tg.active, 5)
+    w._say_goodbye()
+    w._say_goodbye()                                         # a second call must not send again
+    bye = [s for s in fake.sent() if "ปิดโปรแกรมคลังสไตล์แล้ว" in s]
+    assert len(bye) == 1
+    w.tg.stop()
+
+
+def test_quit_message_can_be_turned_off_and_stays_quiet_when_paused(app, tmp_path):
+    w = make_window(tmp_path, tg_token="123:ABC", tg_chat_id=42, tg_notify_quit=False)
+    w.tg.stop()
+    fake = FakeTelegram()
+    w.tg._transport = fake
+    w.tg_start()
+    assert wait_until(app, lambda: w.tg.active, 5)
+    w._say_goodbye()
+    assert not any("ปิดโปรแกรม" in s for s in fake.sent())
+    w.tg.stop()

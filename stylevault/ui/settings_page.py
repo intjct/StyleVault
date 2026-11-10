@@ -246,6 +246,9 @@ class SettingsPage(QWidget):
         self.tg_tray_cb = QCheckBox("ปิดหน้าต่างแล้วให้ทำงานต่อที่ไอคอนข้างนาฬิกา")
         self.tg_tray_cb.toggled.connect(self._tg_tray)
         d.addWidget(self.tg_tray_cb)
+        self.tg_bye_cb = QCheckBox("ตอนปิดโปรแกรม ให้ส่งข้อความบอกในแชตมือถือ")
+        self.tg_bye_cb.toggled.connect(self._tg_bye)
+        d.addWidget(self.tg_bye_cb)
         krow = QHBoxLayout()
         kl = QLabel("ถ้าไม่กดเลือกประเภทคลิปในมือถือ ให้ใช้")
         kl.setObjectName("Soft")
@@ -285,7 +288,7 @@ class SettingsPage(QWidget):
             last = self.tg.last_event if self.tg else ""
             self.tg_event.setText(("ข้อความล่าสุดที่บอทได้รับ: " + last) if last else
                                   "ยังไม่มีข้อความเข้ามา — ลองส่งลิงก์เข้าบอท แล้วดูบรรทัดนี้เปลี่ยน")
-            for cb, val in ((self.tg_auto_cb, self.s.autostart and autostart.is_enabled()), (self.tg_tray_cb, self.s.tray_on_close)):
+            for cb, val in ((self.tg_auto_cb, self.s.autostart and autostart.is_enabled()), (self.tg_tray_cb, self.s.tray_on_close), (self.tg_bye_cb, self.s.tg_notify_quit)):
                 cb.blockSignals(True)
                 cb.setChecked(bool(val))
                 cb.blockSignals(False)
@@ -367,6 +370,10 @@ class SettingsPage(QWidget):
             dialogs.message(self, "ตั้งไม่ได้", "ตัวเลือกนี้ใช้ได้เฉพาะโปรแกรมที่ติดตั้งจากตัวติดตั้งแล้วเท่านั้น")
             on = False
         self.s.autostart = on
+        self.s.save()
+
+    def _tg_bye(self, on: bool):
+        self.s.tg_notify_quit = on
         self.s.save()
 
     def _tg_tray(self, on: bool):
