@@ -354,3 +354,69 @@ def test_quit_message_can_be_turned_off_and_stays_quiet_when_paused(app, tmp_pat
     w._say_goodbye()
     assert not any("ปิดโปรแกรม" in s for s in fake.sent())
     w.tg.stop()
+
+
+def test_connected_as_soon_as_telegram_answers_and_odd_errors_are_reported(app, tmp_path):
+    import http.client
+    w = make_window(tmp_path, tg_token="123:ABC", tg_chat_id=42)
+    w.tg.stop()
+    fake = FakeTelegram()
+    w.tg._transport = fake
+    w.tg_start()
+    assert wait_until(app, lambda: w.tg.state == "ok", 5)
+    w.tg.stop()
+
+    def broken(url, payload, timeout):
+        raise http.client.IncompleteRead(b"")
+    w.tg._transport = broken
+    w.tg_start()
+    assert wait_until(app, lambda: w.tg.state == "offline", 5)
+    assert "ต่อ Telegram ไม่ได้" in w.tg.last_event or "เกิดข้อผิดพลาด" in w.tg.last_event   # never silent
+    w.tg.stop()
+
+    def weird(url, payload, timeout):
+        raise KeyError("boom")
+    w.tg._transport = weird
+    w.tg_start()
+    assert wait_until(app, lambda: "เกิดข้อผิดพลาด" in w.tg.last_event, 5)
+    assert w.tg.state == "offline"
+    w.tg.stop()
+
+
+BIG = 7_600_000_123          # real Telegram ids of newer accounts do not fit in 32 bits
+
+
+def test_big_chat_id_survives_pairing_and_restart(app, tmp_path):
+    w = make_window(tmp_path, tg_token="123:ABC")
+    w.tg.stop()
+    fake = FakeTelegram()
+    w.tg._transport = fake
+    w.tg.configure("123:ABC", 0, "viral", pairing=True)
+    code = w.tg.code
+    fake.updates = [msg(code, chat=BIG, uid=1)]
+    assert wait_until(app, lambda: w.s.tg_chat_id == BIG, 20)       # saved exactly, not cut to 32 bits
+    w.tg.stop()
+    w2 = make_window(tmp_path, tg_token="123:ABC", tg_chat_id=BIG)
+    w2.tg.stop()
+    fake2 = FakeTelegram()
+    w2.tg._transport = fake2
+    w2.tg_start()
+    fake2.updates = [msg("https://vt.tiktok.com/ZSbig/", chat=BIG, uid=2)]
+    assert wait_until(app, lambda: any("คลิปนี้เป็นแบบไหน" in s for s in fake2.sent()), 20)
+    w2.tg.stop()
+
+
+def test_old_cut_chat_id_heals_itself_on_first_message():
+    bot, t, got = make_bot(chat=tgbot.wrap32(BIG))
+    assert bot.chat_id < 0
+    fixed = []
+    bot.on_paired = lambda cid, name: fixed.append(cid)
+    bot.handle(msg("https://vt.tiktok.com/ZSbig/", chat=BIG))
+    assert fixed == [BIG] and bot.chat_id == BIG
+    assert any("คลิปนี้เป็นแบบไหน" in s for s in t.sent())
+
+
+def test_stranger_is_still_ignored_when_id_was_cut():
+    bot, t, got = make_bot(chat=tgbot.wrap32(BIG))
+    bot.handle(msg("https://vt.tiktok.com/ZSx/", chat=555))
+    assert t.sent() == [] and bot.chat_id == tgbot.wrap32(BIG)

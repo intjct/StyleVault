@@ -5,6 +5,7 @@ Only the owner's private chat is accepted. Only links and short notes are read; 
 except short status lines ("#12 เข้าคลังแล้ว")."""
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import secrets
@@ -70,6 +71,11 @@ def extract(text: str) -> tuple[list[str], str]:
     return seen, note
 
 
+def wrap32(n: int) -> int:
+    """What a 32-bit signed integer would hold. Older versions saved the chat id this way by mistake."""
+    return ((int(n) + 2**31) % 2**32) - 2**31
+
+
 def new_code() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
@@ -94,6 +100,8 @@ class Api:
             return body
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             raise TgError("net", net_message(e), detail=f"{type(e).__name__}: {e}") from e
+        except http.client.HTTPException as e:           # half-answers (connection cut in the middle) are not OSError
+            raise TgError("net", "การเชื่อมต่อถูกตัดกลางคัน ลองใหม่อีกครั้ง", detail=f"{type(e).__name__}: {e}") from e
         except ValueError as e:                          # a pasted token with strange characters makes an invalid address
             raise TgError("auth", "รหัสบอทใช้ไม่ได้", detail=str(e)) from e
 
@@ -174,6 +182,13 @@ class Bot:
             return
         cid = int(chat.get("id", 0))
         text = (m.get("text") or m.get("caption") or "").strip()
+        if self.chat_id < 0 and cid > 0 and wrap32(cid) == self.chat_id:
+            # versions 0.8.0-0.8.5 saved big Telegram ids cut to 32 bits (always a wrong, negative number for a private chat).
+            # This is the owner: put the right id back so there is nothing to set up again.
+            frm = m.get("from") or {}
+            self.chat_id = cid
+            self.on_paired(cid, frm.get("first_name") or frm.get("username") or "")
+            self.on_event("แก้เลขบัญชี Telegram ที่โปรแกรมจำผิดไว้ให้แล้ว")
         if not self.chat_id or cid != self.chat_id:
             self.on_event("ได้รับข้อความจากบัญชี Telegram ที่ไม่ใช่บัญชีที่เชื่อมไว้ (ไม่รับ)" if self.chat_id
                           else "ได้รับข้อความ แต่ยังไม่ได้เชื่อมบัญชี")
@@ -260,9 +275,9 @@ class Bot:
 class Service(QObject):
     """Runs the Bot on a background thread and reports to the window by signals."""
     status = Signal(str)                      # off / paused / connecting / ok / offline / badtoken / conflict
-    paired = Signal(int, str)                 # chat id, name
+    paired = Signal(object, str)              # chat id, name  (object, not int: real Telegram ids are bigger than 32 bits)
     pair_locked = Signal()
-    add_request = Signal(list, str, str, int)  # urls, note, kind, chat id
+    add_request = Signal(list, str, str, object)  # urls, note, kind, chat id (object: ids do not fit in 32 bits)
     verified = Signal(bool, str)              # ok, bot name or easy-Thai message
     event = Signal(str)                       # what the bot just did, for the Settings page
 
@@ -390,10 +405,18 @@ class Service(QObject):
                 self._set(st)
         try:
             bot.api.call("deleteWebhook", {}, timeout=20)           # a leftover webhook would block getUpdates
+            set_("ok")                                              # Telegram answered, so we are connected
         except TgError as e:
             if e.kind == "auth":
                 set_("badtoken")
                 return
+            self.last_error = e.detail
+            bot.on_event(f"ต่อ Telegram ไม่ได้ ({e}{' / ' + e.detail[:80] if e.detail else ''}) จะลองใหม่เรื่อยๆ")
+            set_("offline")
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            bot.on_event(f"เกิดข้อผิดพลาดตอนเริ่มเชื่อม ({self.last_error[:100]}) จะลองใหม่เรื่อยๆ")
+            set_("offline")
         while not stop.is_set():
             try:
                 due = bot.next_due()
@@ -406,7 +429,11 @@ class Service(QObject):
                     set_("badtoken")
                     return
                 self.last_error = e.detail
+                bot.on_event(f"ต่อ Telegram ไม่ได้ ({e}{' / ' + e.detail[:80] if e.detail else ''})")
                 set_("conflict" if e.kind == "conflict" else "offline")
                 stop.wait(8 if e.kind == "conflict" else 10)
-            except Exception:
+            except Exception as e:                        # never stay silent on "connecting" forever
+                self.last_error = f"{type(e).__name__}: {e}"
+                bot.on_event(f"เกิดข้อผิดพลาด ({self.last_error[:100]}) จะลองใหม่เรื่อยๆ")
+                set_("offline")
                 stop.wait(10)
