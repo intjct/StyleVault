@@ -76,6 +76,7 @@ class MainWindow(QWidget):
         self.settings_page.tg_changed.connect(self._refresh_tray)
         self._tg_clips: dict[str, int] = {}                    # clip id -> chat to tell when it is done
         self._delete_after: set[str] = set()                   # clips to delete as soon as their loading is stopped
+        self.library_page.hidden_ids = self._delete_after
         self._quitting = False
         self.tray: QSystemTrayIcon | None = None
         self._setup_tray()
@@ -470,6 +471,11 @@ class MainWindow(QWidget):
         if self.jobs.is_active(clip_id):                           # stop the loading first, delete right after it stops
             self._delete_after.add(clip_id)
             self.jobs.cancel(clip_id)
+            self.library_page.refresh()                            # the card goes away right now; the folder follows when the job stops
+            if self.library_page.compare_first == clip_id:
+                self.library_page.set_compare(None)
+            if self.stack.currentWidget() is self.detail and self.detail.clip_id == clip_id:
+                self.show_library()
             return
         self.lib.delete_clip(clip_id)
         if self.library_page.compare_first == clip_id:

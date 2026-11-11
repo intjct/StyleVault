@@ -18,10 +18,14 @@ class Jobs(QObject):
         super().__init__()
         self._lib = get_library
         self._settings = get_settings
-        self._q: queue.Queue = queue.Queue()
+        self._q: queue.Queue = queue.Queue()               # new clips: download / copy / prepare
+        self._xq: queue.Queue = queue.Queue()              # slow extras (spoken words, sound names): never hold up new clips
         self._active: set[str] = set()
-        self._t = threading.Thread(target=self._loop, daemon=True)
+        self._extras_now: set[str] = set()
+        self._t = threading.Thread(target=self._loop, args=(self._q,), daemon=True)
         self._t.start()
+        self._tx = threading.Thread(target=self._loop, args=(self._xq,), daemon=True)
+        self._tx.start()
 
     def is_active(self, clip_id: str) -> bool:
         return clip_id in self._active
@@ -41,17 +45,20 @@ class Jobs(QObject):
     def cancel(self, clip_id: str):
         """Stop a clip that is loading (or waiting in line) - used when the user deletes it."""
         ingest.cancel(clip_id)
+        if clip_id in self._extras_now:                       # whisper is working on this very clip: stop it now
+            from . import transcribe
+            transcribe.kill_all()
 
     def _enqueue(self, job):
         self._active.add(job[1])
-        self._q.put((self._lib(), self._settings(), job))
+        (self._xq if job[0] == "extras" else self._q).put((self._lib(), self._settings(), job))
         self.changed.emit(job[1])
 
-    def _loop(self):
+    def _loop(self, q):
         while True:
-            lib, settings, (kind, clip_id, arg) = self._q.get()
+            lib, settings, (kind, clip_id, arg) = q.get()
             lib: Library
-            if kind in ("link", "file") and ingest.is_cancelled(clip_id):      # deleted while waiting in line
+            if kind in ("link", "file", "extras") and ingest.is_cancelled(clip_id):      # deleted while waiting in line
                 ingest.clear_cancel(clip_id)
                 self._active.discard(clip_id)
                 self.changed.emit(clip_id)
@@ -67,6 +74,7 @@ class Jobs(QObject):
                         raise ingest.IngestError(str(e))
                 elif kind == "extras":
                     from . import prepare
+                    self._extras_now.add(clip_id)
                     prepare.extras(lib, clip_id, prog)
                 elif kind == "link":
                     ingest.download(lib, clip_id, arg, settings, prog)
@@ -80,7 +88,8 @@ class Jobs(QObject):
                 lib.update_meta(clip_id, status="error",
                                 error="เกิดข้อผิดพลาดที่ไม่คาดคิด — กดลองใหม่ ถ้ายังไม่หายให้ลบแล้วเพิ่มใหม่")
             finally:
-                if kind in ("link", "file"):
+                self._extras_now.discard(clip_id)
+                if kind in ("link", "file", "extras"):
                     ingest.clear_cancel(clip_id)
                 self._active.discard(clip_id)
                 try:

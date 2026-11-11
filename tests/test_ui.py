@@ -565,6 +565,33 @@ def test_delete_works_while_a_clip_is_still_loading(app, tmp_path, monkeypatch):
     monkeypatch.setattr(w.jobs, "cancel", lambda c: stopped.append(c))
     w.delete_clip(cid)
     assert stopped == [cid] and w.lib.meta(cid) is not None   # asked it to stop, not deleted yet
+    assert cid not in w.library_page.cards                    # but the card is already gone for the user
     w.jobs._active.discard(cid)                             # the job has stopped
     w._job_changed(cid)
     assert w.lib.meta(cid) is None
+
+
+def test_extras_do_not_block_new_clips_and_deleting_stops_whisper(app, tmp_path, monkeypatch):
+    import threading
+    from stylevault import prepare, transcribe
+    w = make_window(tmp_path)
+    gate = threading.Event()
+    started = threading.Event()
+    killed = []
+
+    def slow_extras(lib, cid, progress=lambda f, t: None):
+        started.set()
+        gate.wait(20)
+    monkeypatch.setattr(prepare, "extras", slow_extras)
+    monkeypatch.setattr(transcribe, "kill_all", lambda: killed.append(1))
+    old = w.lib.create_clip("file", "s", "effects", None)
+    w.jobs.add_extras(old)                                    # a long whisper job is running
+    assert started.wait(5)
+    done = threading.Event()
+    monkeypatch.setattr(prepare, "prepare", lambda lib, cid, prog: done.set())
+    new = w.lib.create_clip("file", "t", "effects", None)
+    w.jobs.add_prepare(new)                                   # a new clip must not wait behind it
+    assert done.wait(5)
+    w.jobs.cancel(old)                                        # deleting the clip whisper works on stops whisper
+    assert killed
+    gate.set()

@@ -24,6 +24,7 @@ class LibraryPage(QWidget):
         self.cards: dict[str, Card] = {}
         self.filter_key = "all"
         self.query = ""
+        self.hidden_ids: set[str] = set()          # clips being deleted: hidden at once while their loading stops
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 22, 28, 0)
@@ -175,7 +176,7 @@ class LibraryPage(QWidget):
     def refresh(self):
         if not self.lib:
             return
-        metas = self.lib.list_meta()
+        metas = [m for m in self.lib.list_meta() if m["id"] not in self.hidden_ids]     # clips being deleted are already gone for the user
         waiting = sum(1 for m in metas if m.get("status") in ("waiting", "downloading", "preparing"))
         card_of = {m["id"]: (self.lib.style_card(m["id"]) if m.get("status") == "analyzed" else None) for m in metas}
         n_script = sum(1 for c in card_of.values() if stylecard.has_script(c))

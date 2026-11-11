@@ -300,7 +300,12 @@ def extras(lib: Library, clip_id: str, progress=lambda f, t: None) -> None:
             data = transcribe.transcribe(video, tpath, lambda f, t: progress(0.3 + 0.7 * f, t))
             lib.update_meta(clip_id, has_speech=data.get("has_speech"), transcribe_failed=None)
         except Exception:
-            lib.update_meta(clip_id, transcribe_failed=transcribe.MODEL_LABEL)
+            from . import ingest
+            if not ingest.is_cancelled(clip_id):                   # stopped because the clip was deleted: not a failure
+                try:
+                    lib.update_meta(clip_id, transcribe_failed=transcribe.MODEL_LABEL)
+                except Exception:
+                    pass
     progress(1.0, "เสร็จแล้ว")
 
 
