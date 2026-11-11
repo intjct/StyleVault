@@ -271,6 +271,8 @@ def needs_extras(lib: Library, clip_id: str) -> bool:
         return False
     if sfxlabel.available() and audio.get("sfx") and not audio.get("labels_version"):
         return True
+    if (lib.meta(clip_id) or {}).get("transcribe_failed") == transcribe.MODEL_LABEL:
+        return False                       # it failed once with this model: do not burn the CPU on every start-up
     return transcribe.ready() and transcribe.needs_redo(_read(os.path.join(raw, "transcript.json")))
 
 
@@ -296,9 +298,9 @@ def extras(lib: Library, clip_id: str, progress=lambda f, t: None) -> None:
         progress(0.3, "กำลังถอดคำพูด…")
         try:
             data = transcribe.transcribe(video, tpath, lambda f, t: progress(0.3 + 0.7 * f, t))
-            lib.update_meta(clip_id, has_speech=data.get("has_speech"))
+            lib.update_meta(clip_id, has_speech=data.get("has_speech"), transcribe_failed=None)
         except Exception:
-            pass
+            lib.update_meta(clip_id, transcribe_failed=transcribe.MODEL_LABEL)
     progress(1.0, "เสร็จแล้ว")
 
 

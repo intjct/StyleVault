@@ -187,3 +187,33 @@ def test_speech_stats_count_words_for_languages_with_spaces():
     assert d["stats"]["words"] == 7 and d["stats"]["words_per_sec"] == 1.75
     assert "words" not in transcribe.parse({"result": {"language": "th"}, "transcription": [
         {"offsets": {"from": 0, "to": 1000}, "text": "สวัสดี"}]})["stats"]
+
+
+
+def test_failed_transcript_is_not_retried_on_every_start(tmp_path, fake_tools, monkeypatch):
+    lib, cid = clip_with_sound(tmp_path)
+    prepare.prepare(lib, cid, lambda f, t: None)
+    os.remove(os.path.join(lib.clip_dir(cid), "raw", "transcript.json"))
+    assert prepare.needs_extras(lib, cid)
+    monkeypatch.setenv("STYLEVAULT_WHISPER", f"{sys.executable}|-c|import sys; sys.exit(3)")
+    prepare.extras(lib, cid)                                           # whisper fails
+    assert not prepare.needs_extras(lib, cid)                          # ...and the next start-up does not try again
+    assert lib.meta(cid)["transcribe_failed"] == transcribe.MODEL_LABEL
+
+
+def test_whisper_is_stopped_when_the_program_closes(tmp_path, monkeypatch):
+    import threading
+    import time
+    monkeypatch.setattr(transcribe, "find_cli", lambda: [sys.executable])
+    cmd = [sys.executable, "-c", "import time; time.sleep(60)"]
+    res = {}
+    t = threading.Thread(target=lambda: res.setdefault("r", transcribe._run_whisper(cmd, None, 120)), daemon=True)
+    t.start()
+    for _ in range(50):
+        if transcribe._running:
+            break
+        time.sleep(0.1)
+    assert transcribe._running
+    transcribe.kill_all()
+    t.join(10)
+    assert not t.is_alive() and not transcribe._running

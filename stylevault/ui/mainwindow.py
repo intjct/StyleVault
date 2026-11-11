@@ -286,7 +286,9 @@ class MainWindow(QWidget):
                     self.lib.update_meta(cid, status="preparing")
                 self.jobs.add_prepare(cid)
         self.library_page.refresh()
-        self._queue_extras()
+        QTimer.singleShot(self.EXTRAS_DELAY_MS, self._queue_extras)      # heavy background work waits until the PC has settled
+
+    EXTRAS_DELAY_MS = 120_000
 
     def _queue_extras(self):
         """Sound names / spoken words for clips that were prepared before these existed (runs in the background)."""

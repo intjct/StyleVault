@@ -8,10 +8,12 @@ which makes clearly fewer Thai spelling mistakes than the plain Whisper model. T
 typhoon-ai checkpoint converted to whisper.cpp format (q8_0, nearly identical to full precision) by a third party."""
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import subprocess
+import threading
 import urllib.request
 
 from . import tools
@@ -28,6 +30,42 @@ OLD_MODELS = ("ggml-small.bin", "ggml-large-v3-turbo-q5_0.bin")
 
 class TranscribeError(Exception):
     """Message is easy Thai."""
+
+
+BELOW_NORMAL = 0x00004000 if tools.IS_WIN else 0     # BELOW_NORMAL_PRIORITY_CLASS: the PC stays smooth while whisper works
+_running: set = set()
+_running_lock = threading.Lock()
+
+
+def kill_all() -> None:
+    """Stop any whisper that is still running (called when the program closes, so nothing is left in Task Manager)."""
+    with _running_lock:
+        procs = list(_running)
+    for p in procs:
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+atexit.register(kill_all)
+
+
+def _run_whisper(cmd: list[str], cwd, timeout: float) -> subprocess.CompletedProcess:
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                         errors="replace", creationflags=tools.NO_WINDOW | BELOW_NORMAL, cwd=cwd)
+    with _running_lock:
+        _running.add(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise
+    finally:
+        with _running_lock:
+            _running.discard(p)
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def models_dir() -> str:
@@ -187,11 +225,10 @@ def transcribe(video: str, out_json: str, progress=lambda f, t: None) -> dict:
         if r.returncode != 0 or not os.path.isfile(wav):
             raise TranscribeError("แยกเสียงจากคลิปไม่ได้")
         progress(0.1, "กำลังถอดคำพูด…")
-        threads = str(max(1, min(8, (os.cpu_count() or 2) - 1)))
+        threads = str(max(1, min(4, (os.cpu_count() or 2) // 2)))       # half the cores at most, so the PC is not choked
         cmd = cli + ["-m", model_path(), "-f", wav, "-l", "auto", "-oj", "-of", base, "-np", "-t", threads]
         cwd = os.path.dirname(cli[-1]) if len(cli) == 1 else None      # its DLLs sit next to it
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=3600, creationflags=tools.NO_WINDOW, cwd=cwd)
+        p = _run_whisper(cmd, cwd, 1800)
         if p.returncode != 0 or not os.path.isfile(base + ".json"):
             raise TranscribeError("ถอดคำพูดไม่สำเร็จ")
         with open(base + ".json", encoding="utf-8", errors="replace") as f:
